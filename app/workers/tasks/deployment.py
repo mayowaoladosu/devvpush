@@ -342,6 +342,16 @@ async def start_deployment(ctx, deployment_id: str):
                     await container.stop()
                 except Exception:
                     pass
+                if loki:
+                    preserved = await loki.preserve_container_logs(
+                        container, deployment
+                    )
+                    if preserved:
+                        logger.info(
+                            "%s Preserved %s final container log lines.",
+                            log_prefix,
+                            preserved,
+                        )
                 queue: ArqRedis = ctx["redis"]
                 await queue.enqueue_job(
                     "delete_container",
@@ -498,6 +508,19 @@ async def fail_deployment(
                     container = await docker_client.containers.get(
                         deployment.container_id
                     )
+                    loki = LokiService()
+                    try:
+                        preserved = await loki.preserve_container_logs(
+                            container, deployment
+                        )
+                        if preserved:
+                            logger.info(
+                                "%s Preserved %s final container log lines.",
+                                log_prefix,
+                                preserved,
+                            )
+                    finally:
+                        await loki.client.aclose()
                     try:
                         await container.stop()
                     except Exception:
