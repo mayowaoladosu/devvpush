@@ -1,7 +1,8 @@
-{% macro render_build_and_deploy(form, presets, runners, init_values=true) %}
+{% macro render_build_and_deploy(form, presets, runners, init_values=true, detection=none, detected_apps=[]) %}
 <script>
   var presets = {{ presets | tojson }};
   var runners = {{ runners | tojson }};
+  var detectedApps = {{ detected_apps | tojson }};
   presets = presets.map(preset => {
     const presetTags = Array.isArray(preset?.tags) ? preset.tags : [];
     if (!presetTags.length) return { ...preset, allowedRunners: null };
@@ -15,10 +16,15 @@
   class="space-y-6"
   x-data="{
     selectedPreset: '{{ form.preset.data or "" }}',
+    selectedDetectedApp: 0,
+    detectedApps,
     initValues: {{ 'true' if init_values else 'false' }},
     getPreset() {
       if (!this.selectedPreset) return null;
       return presets.find(p => p.slug === this.selectedPreset);
+    },
+    getDetectedApp() {
+      return this.detectedApps[Number(this.selectedDetectedApp)] || null;
     },
     disableRunnerOptions(preset) {
       if (!$refs.runnerInput) return;
@@ -63,6 +69,33 @@
       applyValue($refs.preDeployCommandInput, preset?.config?.pre_deploy_command);
       applyValue($refs.startCommandInput, preset?.config?.start_command);
     },
+    applyDetectedApp(index) {
+      const app = this.detectedApps[Number(index)];
+      if (!app) return;
+
+      const presetInput = this.$root.querySelector('input[name=preset]');
+      const presetOption = presetInput
+        ?.closest('.select')
+        ?.querySelector(`[role=option][data-value='${app.preset}']`);
+      if (presetOption) presetOption.click();
+      if (presetInput) presetInput.value = app.preset || '';
+
+      this.selectedPreset = app.preset || '';
+      this.disableRunnerOptions(this.getPreset());
+      const values = [
+        [$refs.runnerInput, app.runner],
+        [$refs.rootDirectoryInput, app.root_directory],
+        [$refs.buildCommandInput, app.build_command],
+        [$refs.preDeployCommandInput, app.pre_deploy_command],
+        [$refs.startCommandInput, app.start_command],
+      ];
+      values.forEach(([field, value]) => {
+        if (!field) return;
+        field.value = value ?? '';
+        field.dispatchEvent(new Event('input', { bubbles: true }));
+        field.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    },
   }"
   x-init="
     setPreset(selectedPreset, false, initValues);
@@ -71,6 +104,76 @@
     }
   "
 >
+  {% if detection %}
+    {% if detection.preset %}
+      <div class="rounded-lg border bg-muted/50 p-4 space-y-3">
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="font-semibold">
+            {{ _('Detected') }}
+            <span x-text="getDetectedApp()?.framework_name">{{ detection.framework_name }}</span>
+          </span>
+          <span class="badge-secondary">
+            <span x-text="getDetectedApp()?.confidence">{{ detection.confidence }}</span>
+            {{ _('confidence') }}
+          </span>
+          <span
+            class="badge-outline font-mono"
+            x-show="getDetectedApp()?.package_manager"
+            x-text="getDetectedApp()?.package_manager"
+          >{{ detection.package_manager or '' }}</span>
+          <span
+            class="badge-outline font-mono"
+            x-show="getDetectedApp()?.root_directory"
+            x-text="getDetectedApp()?.root_directory ? './' + getDetectedApp().root_directory : ''"
+          >{{ ('./' + detection.root_directory) if detection.root_directory else '' }}</span>
+        </div>
+
+        {% if detected_apps | length > 1 %}
+          <div class="space-y-2">
+            <label for="detected-application">{{ _('Detected application') }}</label>
+            <select
+              id="detected-application"
+              class="w-full"
+              x-model="selectedDetectedApp"
+              @change="applyDetectedApp(selectedDetectedApp)"
+            >
+              {% for app in detected_apps %}
+                <option value="{{ loop.index0 }}">
+                  {{ app.framework_name }} — {{ ('./' + app.root_directory) if app.root_directory else './' }}
+                </option>
+              {% endfor %}
+            </select>
+            <p class="text-sm text-muted-foreground">
+              {{ _('Multiple deployable applications were found. Choose which application this project should deploy.') }}
+            </p>
+          </div>
+        {% endif %}
+
+        <div class="flex flex-wrap gap-1.5" x-show="getDetectedApp()?.evidence?.length">
+          <template x-for="item in getDetectedApp()?.evidence || []" :key="item">
+            <span class="badge-outline font-mono text-xs" x-text="item"></span>
+          </template>
+        </div>
+
+        <ul
+          class="space-y-1 text-sm text-amber-700 dark:text-amber-300"
+          x-show="getDetectedApp()?.warnings?.length"
+        >
+          <template x-for="warning in getDetectedApp()?.warnings || []" :key="warning">
+            <li x-text="'• ' + warning"></li>
+          </template>
+        </ul>
+      </div>
+    {% else %}
+      <div class="rounded-lg border p-4 text-sm text-muted-foreground">
+        {{ _('No deployable framework was detected. Select a runner and enter commands manually.') }}
+        {% if detection.dockerfile_path %}
+          {{ _('A Dockerfile was found at %(path)s.', path=detection.dockerfile_path) }}
+        {% endif %}
+      </div>
+    {% endif %}
+  {% endif %}
+
   {# FRAMEWORK PRESET #}
   <div class="space-y-3">
     <label for="preset">{{ _('Framework preset') }}</label>
@@ -99,7 +202,7 @@
         name="preset",
         items=preset_options.items,
         selected=form.preset.data,
-        main_attrs={'@change': 'setPreset(event.detail.value, true)'},
+        main_attrs={'@change': 'if (event.detail?.value !== undefined) setPreset(event.detail.value, true)'},
         is_combobox=True,
         listbox_attrs={'class': 'max-h-[162px] overflow-y-auto scrollbar'}
       ) }}

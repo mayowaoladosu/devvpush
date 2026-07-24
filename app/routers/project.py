@@ -230,12 +230,15 @@ async def new_project_details(
 
         # Handle build_and_deploy fragment with framework detection
         if fragment == "build_and_deploy":
+            detection = None
+            detected_apps = []
             try:
                 github_oauth_token = await get_user_github_token(db, current_user)
                 if github_oauth_token:
                     detector = PresetDetector(enabled_presets)
 
-                    # Run detection with 5 second timeout
+                    # Bound remote tree and manifest analysis so the form stays
+                    # responsive.
                     detection = await asyncio.wait_for(
                         detector.detect_with_commands(
                             github_service,
@@ -243,7 +246,7 @@ async def new_project_details(
                             int(repo_id),
                             repo_default_branch,
                         ),
-                        timeout=5.0,
+                        timeout=12.0,
                     )
 
                     # If preset detected, get preset config and set all form fields
@@ -278,6 +281,16 @@ async def new_project_details(
                                 "pre_deploy_command"
                             ) or preset_config.get("pre_deploy_command")
 
+                            recommended = {
+                                key: value
+                                for key, value in detection.items()
+                                if key != "alternatives"
+                            }
+                            detected_apps = [
+                                recommended,
+                                *(detection.get("alternatives") or []),
+                            ]
+
             except asyncio.TimeoutError:
                 logger.warning(f"Framework detection timed out for repo {repo_id}")
                 flash(request, _("Framework detection timed out."), "error")
@@ -296,6 +309,8 @@ async def new_project_details(
                     "presets": enabled_presets,
                     "runners": enabled_runners,
                     "detecting": False,
+                    "detection": detection,
+                    "detected_apps": detected_apps,
                 },
             )
 
