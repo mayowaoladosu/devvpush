@@ -160,6 +160,7 @@ These guidelines apply to every script under `scripts/` (install/start/stop/rest
 4. **Job queue**: Access via `get_queue()` dependency (returns `ArqRedis` connection)
 5. **Development reloads**: Do not add ARQ `--watch` to the jobs worker. Builds are long-running and must not be interrupted by source-file changes; restart `worker-jobs` explicitly after job-code edits.
 6. **Deployment scheduling**: Queue deployments only through `DeploymentService.schedule()`. Webhook scheduling is delivery-ID-idempotent and newest-commit-wins per project/environment; partial webhook failures must stay retryable, and manual deploys must never be auto-superseded. Worker checkpoints and finalizers must preserve existing terminal conclusions.
+7. **Dependency caches**: Keep zero-config package caches behind `DependencyCacheService`. Cache mounts must target only `/cache`, stay isolated by project/environment/runner/generation, and never be added to Dockerfile containers. Clearing rotates generations; pruning must preserve every generation still labeled on an existing container.
 
 ### Code Style
 

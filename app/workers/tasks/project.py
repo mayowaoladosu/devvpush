@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import time
@@ -8,6 +9,7 @@ from sqlalchemy import delete, select
 from config import get_settings
 from db import AsyncSessionLocal
 from models import Alias, Deployment, Domain, Project, StorageProject
+from services.dependency_cache import DependencyCacheService
 from services.dockerfile_builder import remove_managed_deployment_image
 
 logger = logging.getLogger(__name__)
@@ -173,6 +175,8 @@ async def delete_project(ctx, project_id: str, batch_size: int = 100):
 
                 # 4. Delete the project
                 try:
+                    cache = DependencyCacheService(settings, [])
+                    await asyncio.to_thread(cache.delete_project, project_id)
                     await db.execute(delete(Project).where(Project.id == project_id))
                     await db.commit()
 

@@ -23,6 +23,7 @@ This document describes the high‑level architecture of /dev/push, how the main
 - **Workers**: Scheduling is serialized by project environment before an arq job is created. Webhook deliveries are idempotent and newest-commit-wins: older webhook jobs in `prepare` or `deploy` become skipped and are aborted/cleaned, while manual deploys are never superseded. The jobs worker starts a container, the monitor worker probes readiness, and the finalizer promotes aliases under the same environment lock. Deployment lifecycle statuses: `prepare → deploy → finalize → completed` (with `conclusion`: succeeded/failed/canceled/skipped; `fail` is transient for failure handling).
 - **Logs**: build and runtime logs are streamed from Loki and served to the user via an SSE endpoint in the app.
 - **Runners**: Zero-config apps run inside language containers pulled from the registry catalog. Dockerfile apps are built into immutable per-deployment images and run their image-defined command.
+- **Dependency cache**: Official zero-config runners direct package-manager caches to `/cache`. DevPush mounts a host-backed generation isolated by project, environment, and runner image. Cache clears rotate generations atomically; background pruning removes only generations no longer mounted by current, rollback, or stopped containers.
 - **BuildKit**: Only the jobs worker can reach the rootless daemon over a group-restricted Unix socket. BuildKit has persistent layer cache, a private internal network, a read-only root filesystem, bounded resources, and no host Docker socket or control-plane network membership. Public dependency traffic crosses a separate filtered-egress proxy.
 - **Framework detection**: Repository import reads one recursive Git tree and a bounded batch of manifests. The detector ranks every candidate application root, derives package-manager-aware commands, and returns a recommendation plus monorepo alternatives and evidence. Explicit Dockerfiles are associated with their application roots and take precedence while remaining editable.
 - **Reverse proxy**: We have Traefik sitting in front of both app and the deployed runner containers. All routing is done using Traefik labels, and we also maintain environment and branch aliases (e.g. `my-project-env-staging.devpush.app`) using Traefik config files.
@@ -164,6 +165,7 @@ Notes:
 
 2) `start_deployment`
   - Zero-config: create a language runner, clone the selected commit, run optional build/pre-deploy commands, then start the app.
+  - For cache-aware zero-config runners, mount the selected dependency-cache generation at `/cache`, emit hit/miss metadata, and mark it reusable only after the build command succeeds.
   - Dockerfile: download the immutable GitHub archive, safely extract the selected root, stream the context to rootless BuildKit, export/load a managed image, then start its `CMD`/`ENTRYPOINT` without source credentials.
   - Apply runtime env vars, resource limits, Traefik labels, and JSON logging to either container type.
   - Mark deployment `in_progress`, set `container_id=…`, emit Redis Stream update.
@@ -221,6 +223,7 @@ Notes:
 
 - Sessions: signed cookies with CSRF protection (no Redis session storage).
 - Secrets: Fernet encryption for env vars and tokens.
+- Dependency caches: Build-controlled cache contents are isolated by project/environment/runner and never mounted into Dockerfile builds or another project. Clearing rotates paths instead of deleting mounts used by running containers.
 - Docker: host build/exec/system endpoints are denied by the proxy; repository build steps execute in rootless BuildKit without the host socket. Runtime containers drop all capabilities, cannot gain privileges, and have a PID ceiling. Dockerfile images must declare a non-root user and receive no capabilities; zero-config runner bootstraps receive only the ownership and UID/GID capabilities needed to become the configured non-root user.
 - Source: Dockerfile archives are bounded and extracted with Python's data filter plus explicit path/size checks.
 - Build secrets: GitHub and project secrets are not exposed to Dockerfile instructions or persisted in build context/cache.

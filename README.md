@@ -13,6 +13,7 @@ An open-source and self-hostable alternative to Vercel, Render, Netlify and the 
 - **Git-based deployments**: Push to deploy from GitHub with newest-commit-wins scheduling, zero-downtime rollouts, cancellation, and instant rollback.
 - **Multi-language support**: Python, Node.js, PHP... basically anything that can run on Docker.
 - **Native Dockerfiles**: Build repository Dockerfiles with cached, rootless BuildKit and run the resulting image command.
+- **Fast redeploys**: Reuse isolated package-manager downloads across zero-config deployments and rotate caches without disrupting running releases.
 - **Environment management**: Multiple environments with branch mapping and encrypted environment variables.
 - **Real-time monitoring**: Live and searchable build and runtime logs.
 - **Team collaboration**: Role-based access control with team invitations and permissions.
@@ -108,6 +109,15 @@ are deliberate and are never superseded. Finalizers use the same environment
 lock so an older commit cannot reclaim an alias after a newer deployment wins.
 If any project mapped to a repository cannot schedule, the webhook returns a
 retryable failure; projects already scheduled by that delivery are reused.
+
+Official zero-config runners place npm, pnpm, Yarn, Bun, pip, uv, Composer, and
+other package-manager caches beneath `/cache`. DevPush binds that path to a
+generation-scoped directory isolated by project, environment, and runner image.
+Only dependency downloads are retained—checkout-specific `node_modules`, virtual
+environments, and build outputs remain ephemeral. Clearing the cache rotates the
+generation immediately for future deployments; generations still mounted by a
+current or rollback container are preserved until those containers are removed.
+Dockerfile projects continue to use BuildKit's bounded persistent layer cache.
 
 **Key scripts**:
 

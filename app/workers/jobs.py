@@ -3,6 +3,7 @@ import logging
 from arq.connections import RedisSettings
 
 from config import get_settings
+from workers.tasks.dependency_cache import prune_dependency_cache
 from workers.tasks.deployment import (
     cleanup_inactive_containers,
     delete_container,
@@ -36,6 +37,7 @@ class WorkerSettings:
         delete_project,
         cleanup_inactive_containers,
         delete_container,
+        prune_dependency_cache,
         provision_storage,
         deprovision_storage,
         reset_storage,

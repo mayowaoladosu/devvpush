@@ -15,6 +15,7 @@ from dependencies import (
     get_redis_client,
 )
 from models import Alias, Deployment, Project
+from services.dependency_cache import DependencyCacheService
 from services.deployment import DeploymentService
 from services.dockerfile_builder import (
     DockerfileBuilder,
@@ -217,6 +218,30 @@ async def start_deployment(ctx, deployment_id: str):
                 )
                 config = deployment.config or {}
                 uses_dockerfile = DeploymentService.uses_dockerfile(config)
+                registry_state = RegistryService(
+                    Path(settings.data_dir) / "registry"
+                ).state
+                cache_mount = DependencyCacheService(
+                    settings, registry_state.runners
+                ).prepare(deployment)
+                if cache_mount:
+                    mounts.append(cache_mount.bind)
+                    env_vars_dict["DEVPUSH_DEPENDENCY_CACHE"] = (
+                        "hit" if cache_mount.warm else "miss"
+                    )
+                    env_vars_dict["DEVPUSH_DEPENDENCY_CACHE_GENERATION"] = str(
+                        cache_mount.generation
+                    )
+                    await _push_loki_log(
+                        loki,
+                        deployment,
+                        "Dependency cache %s (generation %s, runner %s)"
+                        % (
+                            "hit" if cache_mount.warm else "miss",
+                            cache_mount.generation,
+                            cache_mount.runner_slug,
+                        ),
+                    )
 
                 commands = []
                 github_installation = (
@@ -310,6 +335,10 @@ async def start_deployment(ctx, deployment_id: str):
                     if config.get("build_command"):
                         commands.append("echo 'Installing dependencies...'")
                         commands.append(f"( {config.get('build_command')} )")
+                        if cache_mount:
+                            commands.append(
+                                f"touch {shlex.quote(cache_mount.ready_marker)}"
+                            )
 
                     if config.get("pre_deploy_command"):
                         commands.append("echo 'Running pre-deploy command...'")
@@ -334,6 +363,13 @@ async def start_deployment(ctx, deployment_id: str):
                     "devpush.environment_id": deployment.environment_id,
                     "devpush.branch": deployment.branch,
                 }
+                if cache_mount:
+                    labels.update(
+                        {
+                            "devpush.cache_generation": str(cache_mount.generation),
+                            "devpush.cache_namespace": cache_mount.namespace,
+                        }
+                    )
 
                 if settings.url_scheme == "https":
                     labels.update(
@@ -924,6 +960,17 @@ async def delete_container(ctx, deployment_id: str):
                 if removed_image:
                     logger.info(f"{log_prefix} Removed deployment image")
                 await db.commit()
+                queue: ArqRedis = ctx["redis"]
+                try:
+                    await queue.enqueue_job(
+                        "prune_dependency_cache", deployment.project_id
+                    )
+                except Exception:
+                    logger.warning(
+                        "%s Could not enqueue dependency-cache pruning.",
+                        log_prefix,
+                        exc_info=True,
+                    )
         except Exception:
             logger.error(
                 f"[DeleteContainer:{deployment_id}] Error deleting container.",
@@ -1071,6 +1118,17 @@ async def cleanup_inactive_containers(
                 else:
                     logger.info(
                         f"[CleanupInactiveContainers:{project_id}] No inactive containers found"
+                    )
+
+                queue: ArqRedis = ctx["redis"]
+                try:
+                    await queue.enqueue_job("prune_dependency_cache", project_id)
+                except Exception:
+                    logger.warning(
+                        "[CleanupInactiveContainers:%s] Could not enqueue "
+                        "dependency-cache pruning.",
+                        project_id,
+                        exc_info=True,
                     )
 
             except Exception as error:

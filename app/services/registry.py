@@ -62,6 +62,7 @@ class RunnerSetting(BaseModel):
     name: str
     category: str | None = None
     image: str
+    cache_directory: str | None = None
     enabled: bool | None = None
     tags: list[str] = []
 

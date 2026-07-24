@@ -50,3 +50,13 @@ Notes:
   `registry` for catalogs fetched from the registry.
 - Catalog format: see the registry repository README:
   https://github.com/devpushhq/registry/blob/main/README.md
+
+## Dependency-cache contract
+
+Official `ghcr.io/devpushhq/runner-*` images automatically participate in
+dependency caching and configure their package managers beneath `/cache`.
+Custom runners can opt in with `"cache_directory": "/cache"`; no other target is
+accepted. An opted-in image must start as root, make `/cache` writable by the
+configured `PUID`/`PGID`, and drop privileges before running repository code.
+The cache is for package downloads/stores only—do not point it at `node_modules`,
+a virtual environment, the repository checkout, or application output.

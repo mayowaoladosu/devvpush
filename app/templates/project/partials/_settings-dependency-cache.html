@@ -1,0 +1,80 @@
+<div id="dependency-cache-card" class="card">
+  <header class="border-b">
+    <h2>{{ _('Dependency cache') }}</h2>
+    <p>{{ _('Reuse package-manager downloads across zero-config deployments without persisting checkout-specific install directories.') }}</p>
+  </header>
+
+  <section class="space-y-6">
+    <form
+      method="post"
+      action="{{ url_for('project_settings', team_slug=team.slug, project_name=project.name).include_query_params(fragment='dependency_cache') }}"
+      hx-post="{{ url_for('project_settings', team_slug=team.slug, project_name=project.name).include_query_params(fragment='dependency_cache') }}"
+      hx-target="#dependency-cache-card"
+      hx-swap="outerHTML"
+      hx-disabled-elt="find button"
+      class="space-y-4"
+      x-data="{ enabled: {{ 'true' if dependency_cache_form.enabled.data else 'false' }} }"
+    >
+      {{ dependency_cache_form.csrf_token(id=False) }}
+      <div class="flex items-start justify-between gap-6">
+        <div class="space-y-1">
+          <label for="dependency-cache-enabled" class="font-medium">{{ _('Automatic package cache') }}</label>
+          <p class="text-sm text-muted-foreground">
+            {{ _('Official runners cache npm, pnpm, Yarn, Bun, pip, uv, Composer, and other package downloads beneath an isolated project and environment path.') }}
+          </p>
+        </div>
+        {{ dependency_cache_form.enabled(
+          id='dependency-cache-enabled',
+          class_='input shrink-0',
+          role='switch',
+          checked=dependency_cache_form.enabled.data,
+          **{'x-model': 'enabled'}
+        ) }}
+      </div>
+
+      {% if project.config.get('build_strategy') == 'dockerfile' %}
+        <div class="alert">
+          {% include "icons/info.svg" %}
+          <section>{{ _('Dockerfile builds use the persistent BuildKit layer cache instead. This setting applies if the project switches to a zero-config runner.') }}</section>
+        </div>
+      {% endif %}
+
+      <div class="flex justify-end">
+        <button type="submit" class="btn-sm">{{ _('Save') }}</button>
+      </div>
+    </form>
+
+    <div class="rounded-lg border p-4 flex items-center justify-between gap-6">
+      <div class="space-y-1">
+        <div class="flex items-center gap-2">
+          <span class="font-medium">{{ _('Current generation') }}</span>
+          <span class="badge-secondary font-mono">{{ dependency_cache_generation }}</span>
+          {% if dependency_cache_exists %}
+            <span class="badge-secondary">{{ _('Ready') }}</span>
+          {% else %}
+            <span class="badge-outline">{{ _('Cold') }}</span>
+          {% endif %}
+        </div>
+        <p class="text-sm text-muted-foreground">
+          {{ _('Clearing rotates to a new generation. Running and rollback deployments keep their existing read/write mount until their containers are removed.') }}
+        </p>
+      </div>
+      <form
+        method="post"
+        action="{{ url_for('project_settings', team_slug=team.slug, project_name=project.name).include_query_params(fragment='dependency_cache', action='clear') }}"
+        hx-post="{{ url_for('project_settings', team_slug=team.slug, project_name=project.name).include_query_params(fragment='dependency_cache', action='clear') }}"
+        hx-target="#dependency-cache-card"
+        hx-swap="outerHTML"
+        hx-confirm="{{ _('Clear the dependency cache for future deployments?') }}"
+        hx-disabled-elt="find input"
+        class="shrink-0"
+      >
+        {{ dependency_cache_clear_form.csrf_token(id=False) }}
+        {{ dependency_cache_clear_form.submit(
+          class_='btn-sm-outline',
+          disabled=(not dependency_cache_exists)
+        ) }}
+      </form>
+    </div>
+  </section>
+</div>

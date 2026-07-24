@@ -311,6 +311,14 @@ class ProjectResourcesForm(StarletteForm):
             )
 
 
+class ProjectDependencyCacheForm(StarletteForm):
+    enabled = BooleanField(_l("Enable dependency cache"), default=True)
+
+
+class ProjectDependencyCacheClearForm(StarletteForm):
+    submit = SubmitField(_l("Clear dependency cache"))
+
+
 class ProjectDomainForm(StarletteForm):
     domain_id = HiddenField()
     hostname = StringField(

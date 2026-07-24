@@ -107,6 +107,27 @@ class RegistryFrameworkPresetTests(unittest.TestCase):
 
             self.assertFalse(framework["enabled"])
 
+    def test_custom_runner_keeps_dependency_cache_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_registry(
+                root,
+                {
+                    "runners": {
+                        "node-24": {
+                            "enabled": True,
+                            "cache_directory": "/cache",
+                        }
+                    },
+                    "presets": {},
+                },
+            )
+
+            state = RegistryService(root).state
+            runner = next(item for item in state.runners if item["slug"] == "node-24")
+
+            self.assertEqual("/cache", runner["cache_directory"])
+
 
 if __name__ == "__main__":
     unittest.main()

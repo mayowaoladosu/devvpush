@@ -54,6 +54,8 @@ from forms.project import (
     ProjectDomainForm,
     ProjectDomainRemoveForm,
     ProjectDomainVerifyForm,
+    ProjectDependencyCacheClearForm,
+    ProjectDependencyCacheForm,
     ProjectResourcesForm,
 )
 from forms.storage import (
@@ -65,6 +67,7 @@ from config import get_settings, Settings
 from db import get_db
 from services.github import GitHubService
 from services.github_installation import GitHubInstallationService
+from services.dependency_cache import DependencyCacheService
 from services.deployment import DeploymentService
 from services.domain import DomainService
 from services.preset_detector import PresetDetector
@@ -402,6 +405,8 @@ async def new_project_details(
                 "start_command": form.start_command.data
                 if form.build_strategy.data != "dockerfile"
                 else "",
+                "dependency_cache": True,
+                "dependency_cache_generation": 1,
             },
             env_vars=env_vars,
             environments=[
@@ -1866,6 +1871,74 @@ async def project_settings(
                 },
             )
 
+    # Dependency cache
+    dependency_cache_service = DependencyCacheService(
+        settings, registry_state.runners
+    )
+    dependency_cache_form: Any = await ProjectDependencyCacheForm.from_formdata(
+        request,
+        data={
+            "enabled": project.config.get("dependency_cache", True) is not False,
+        },
+    )
+    dependency_cache_clear_form: Any = (
+        await ProjectDependencyCacheClearForm.from_formdata(request)
+    )
+    dependency_cache_generation = dependency_cache_service.generation(project.config)
+    dependency_cache_exists = dependency_cache_service.current_generation_exists(
+        project.id, project.config
+    )
+
+    if fragment == "dependency_cache":
+        action = request.query_params.get("action")
+        if action == "clear":
+            if await dependency_cache_clear_form.validate_on_submit():
+                project.config = dependency_cache_service.rotate_config(project.config)
+                await db.commit()
+                dependency_cache_generation = dependency_cache_service.generation(
+                    project.config
+                )
+                dependency_cache_exists = False
+                dependency_cache_form.enabled.data = (
+                    project.config.get("dependency_cache", True) is not False
+                )
+                try:
+                    await queue.enqueue_job("prune_dependency_cache", project.id)
+                except Exception:
+                    logger.warning(
+                        "Could not enqueue dependency-cache pruning for project %s.",
+                        project.id,
+                        exc_info=True,
+                    )
+                flash(
+                    request,
+                    _("Dependency cache cleared for future deployments."),
+                    "success",
+                )
+        elif await dependency_cache_form.validate_on_submit():
+            project.config = {
+                **(project.config or {}),
+                "dependency_cache": bool(dependency_cache_form.enabled.data),
+                "dependency_cache_generation": dependency_cache_generation,
+            }
+            await db.commit()
+            flash(request, _("Dependency cache settings updated."), "success")
+
+        if request.headers.get("HX-Request"):
+            return TemplateResponse(
+                request=request,
+                name="project/partials/_settings-dependency-cache.html",
+                context={
+                    "current_user": current_user,
+                    "team": team,
+                    "project": project,
+                    "dependency_cache_form": dependency_cache_form,
+                    "dependency_cache_clear_form": dependency_cache_clear_form,
+                    "dependency_cache_generation": dependency_cache_generation,
+                    "dependency_cache_exists": dependency_cache_exists,
+                },
+            )
+
     # Resources
     resources_form: Any = await ProjectResourcesForm.from_formdata(
         request=request,
@@ -2108,6 +2181,10 @@ async def project_settings(
             "environment_form": environment_form,
             "remove_environment_form": remove_environment_form,
             "build_and_deploy_form": build_and_deploy_form,
+            "dependency_cache_form": dependency_cache_form,
+            "dependency_cache_clear_form": dependency_cache_clear_form,
+            "dependency_cache_generation": dependency_cache_generation,
+            "dependency_cache_exists": dependency_cache_exists,
             "resources_form": resources_form,
             "default_cpus": settings.default_cpus,
             "default_memory": settings.default_memory_mb,
