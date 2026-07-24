@@ -87,7 +87,12 @@ printf '\n'
 run_cmd "Waiting for Docker to be ready" wait_for_docker
 
 # Default data directory
-mkdir -p -m 0750 "$DATA_DIR/traefik" "$DATA_DIR/upload" "$DATA_DIR/registry"
+mkdir -p "$DATA_DIR/traefik" "$DATA_DIR/upload" "$DATA_DIR/registry"
+if ! chmod 0750 "$DATA_DIR/traefik" "$DATA_DIR/upload" "$DATA_DIR/registry" 2>/dev/null \
+  && [[ "$ENVIRONMENT" == "production" ]]; then
+  err "Unable to set permissions on data directories."
+  exit 1
+fi
 if [[ "$ENVIRONMENT" == "production" ]]; then
   service_user="$(default_service_user)"
   chown -R "$service_user:$service_user" "$DATA_DIR" || true
