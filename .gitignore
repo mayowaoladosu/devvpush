@@ -1,6 +1,7 @@
 # Ignore all dot files except a few
 .*
 !.gitignore
+!.gitattributes
 !.dockerignore
 !.env.example
 !.env.dev.example

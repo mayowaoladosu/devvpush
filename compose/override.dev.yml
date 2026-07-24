@@ -39,3 +39,11 @@ services:
       - ${DATA_DIR:-../data}/traefik:/etc/traefik/dynamic_conf
     labels:
       - "traefik.http.middlewares.deployment-redirect.redirectRegex.replacement=http://${APP_HOSTNAME}/deployment-not-found/$$1"
+
+volumes:
+  devpush-db:
+    name: "${DEVPUSH_VOLUME_PREFIX:-devpush}_devpush-db"
+  loki-data:
+    name: "${DEVPUSH_VOLUME_PREFIX:-devpush}_loki-data"
+  alloy-data:
+    name: "${DEVPUSH_VOLUME_PREFIX:-devpush}_alloy-data"
