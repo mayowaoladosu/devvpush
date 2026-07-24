@@ -19,6 +19,12 @@ class PresetVariantConfigSetting(BaseModel):
     root_directory: str | None = None
     logo: str | None = None
     beta: bool | None = None
+    build_script: str | None = None
+    start_script: str | None = None
+    output: str | None = None
+    output_directory: str | None = None
+    modern_runner: str | None = None
+    bun_runner: str | None = None
 
     model_config = {"extra": "ignore"}
 
@@ -29,6 +35,8 @@ class DetectionVariantSetting(BaseModel):
     all_files: list[str] = []
     any_paths: list[str] = []
     none_files: list[str] = []
+    any_dependencies: list[str] = []
+    all_dependencies: list[str] = []
     package_check: str | None = None
     config: PresetVariantConfigSetting | None = None
 
@@ -41,6 +49,8 @@ class DetectionSetting(BaseModel):
     all_files: list[str] = []
     any_paths: list[str] = []
     none_files: list[str] = []
+    any_dependencies: list[str] = []
+    all_dependencies: list[str] = []
     package_check: str | None = None
     variants: list[DetectionVariantSetting] = []
 
@@ -53,18 +63,25 @@ class RunnerSetting(BaseModel):
     category: str | None = None
     image: str
     enabled: bool | None = None
+    tags: list[str] = []
 
     model_config = {"extra": "ignore"}
 
 
 class PresetConfigSetting(BaseModel):
     runner: str
-    build_command: str
-    pre_deploy_command: str
-    start_command: str
-    logo: str
+    build_command: str = ""
+    pre_deploy_command: str = ""
+    start_command: str = ""
+    logo: str = ""
     root_directory: str | None = None
     beta: bool | None = None
+    build_script: str | None = None
+    start_script: str | None = None
+    output: str | None = None
+    output_directory: str | None = None
+    modern_runner: str | None = None
+    bun_runner: str | None = None
     detection: DetectionSetting | None = None
 
     model_config = {"extra": "ignore"}
@@ -74,6 +91,8 @@ class PresetSetting(BaseModel):
     slug: str
     name: str
     category: str | None = None
+    description: str | None = None
+    tags: list[str] = []
     config: PresetConfigSetting
     enabled: bool | None = None
 
@@ -108,6 +127,7 @@ class RegistryService:
         self.registry_dir = registry_dir
         self.catalog_path = self.registry_dir / "catalog.json"
         self.overrides_path = self.registry_dir / "overrides.json"
+        self.framework_catalog_path = Path(__file__).with_name("framework_catalog.json")
         self._catalog_adapter = TypeAdapter(CatalogSetting)
         self.state = self._load_state()
 
@@ -223,7 +243,38 @@ class RegistryService:
         if not self.catalog_path.exists():
             raise FileNotFoundError(f"Missing registry catalog at {self.catalog_path}")
         raw = self._read_json(self.catalog_path, "catalog")
-        return self._validate_catalog(raw, self.catalog_path)
+        catalog = self._validate_catalog(raw, self.catalog_path)
+        return self._extend_catalog(catalog)
+
+    def _extend_catalog(self, catalog: CatalogSetting) -> CatalogSetting:
+        if not self.framework_catalog_path.exists():
+            return catalog
+        extension = self._read_json(self.framework_catalog_path, "framework catalog")
+        if not isinstance(extension.get("runners", []), list) or not isinstance(
+            extension.get("presets", []), list
+        ):
+            raise ValueError(
+                f"Invalid framework catalog format in {self.framework_catalog_path}"
+            )
+
+        data = catalog.model_dump()
+        for key in ("runners", "presets"):
+            indexes = {
+                item.get("slug"): index
+                for index, item in enumerate(data[key])
+                if isinstance(item.get("slug"), str)
+            }
+            for item in extension.get(key, []):
+                if not isinstance(item, dict) or not isinstance(item.get("slug"), str):
+                    continue
+                index = indexes.get(item["slug"])
+                if index is None:
+                    indexes[item["slug"]] = len(data[key])
+                    data[key].append(item)
+                else:
+                    data[key][index] = self._deep_merge_dicts(data[key][index], item)
+
+        return self._validate_catalog(data, self.framework_catalog_path)
 
     def _load_overrides(self, catalog: CatalogSetting | None) -> dict:
         overrides = (
@@ -299,13 +350,7 @@ class RegistryService:
                     if isinstance(merged.get("config"), dict)
                     else None
                 )
-                required_config = {
-                    "runner",
-                    "build_command",
-                    "pre_deploy_command",
-                    "start_command",
-                    "logo",
-                }
+                required_config = {"runner"}
                 if not config or not required_config.issubset(set(config.keys())):
                     continue
             explicit_disable = (

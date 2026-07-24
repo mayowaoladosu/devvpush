@@ -1,8 +1,11 @@
+import asyncio
+import base64
+import time
+from email.utils import parsedate_to_datetime
+from typing import Any
+
 import httpx
 import jwt
-import time
-from typing import Any
-from email.utils import parsedate_to_datetime
 
 
 class GitHubService:
@@ -357,10 +360,76 @@ class GitHubService:
             data = response.json()
 
             # GitHub returns base64 encoded content
-            import base64
-
             return base64.b64decode(data["content"]).decode("utf-8")
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 return None
             raise
+
+    async def get_file_contents(
+        self,
+        user_access_token: str,
+        repo_id: int,
+        paths: list[str],
+        ref: str = "HEAD",
+        max_bytes: int = 262_144,
+        concurrency: int = 8,
+    ) -> dict[str, str]:
+        """Fetch a bounded set of repository text files concurrently.
+
+        Missing, binary, oversized, and undecodable files are omitted so a bad
+        manifest cannot prevent the remaining repository from being detected.
+        """
+        semaphore = asyncio.Semaphore(max(1, min(concurrency, 16)))
+        headers = {"Authorization": f"Bearer {user_access_token}"}
+
+        async with httpx.AsyncClient(headers=headers, timeout=10.0) as client:
+
+            async def fetch(path: str) -> tuple[str, str] | None:
+                response = None
+                for attempt in range(3):
+                    async with semaphore:
+                        response = await client.get(
+                            f"https://api.github.com/repositories/{repo_id}/contents/{path}",
+                            params={"ref": ref},
+                        )
+                    retry_after = response.headers.get("Retry-After")
+                    rate_limited = response.status_code == 429 or (
+                        response.status_code == 403
+                        and (
+                            retry_after is not None
+                            or response.headers.get("X-RateLimit-Remaining") == "0"
+                        )
+                    )
+                    if not rate_limited or attempt == 2:
+                        break
+                    try:
+                        delay = float(retry_after) if retry_after else 0.5 * 2**attempt
+                    except ValueError:
+                        delay = 0.5 * 2**attempt
+                    await asyncio.sleep(min(max(delay, 0.1), 2.0))
+
+                assert response is not None
+                if response.status_code == 404:
+                    return None
+                response.raise_for_status()
+                data = response.json()
+                if not isinstance(data, dict) or data.get("type") != "file":
+                    return None
+                size = data.get("size")
+                if isinstance(size, int) and size > max_bytes:
+                    return None
+                encoded = data.get("content")
+                if not isinstance(encoded, str):
+                    return None
+                try:
+                    raw = base64.b64decode(encoded, validate=False)
+                    if len(raw) > max_bytes:
+                        return None
+                    return path, raw.decode("utf-8")
+                except (ValueError, UnicodeDecodeError):
+                    return None
+
+            results = await asyncio.gather(*(fetch(path) for path in paths))
+
+        return {result[0]: result[1] for result in results if result is not None}

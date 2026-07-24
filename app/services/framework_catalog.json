@@ -1,0 +1,443 @@
+{
+  "runners": [
+    {
+      "slug": "node-24",
+      "name": "Node.js 24",
+      "category": "Node.js",
+      "image": "ghcr.io/devpushhq/runner-node-24:1.0.1"
+    }
+  ],
+  "presets": [
+    {
+      "slug": "starlette",
+      "name": "Starlette",
+      "category": "Python",
+      "description": "ASGI applications built with Starlette.",
+      "config": {
+        "runner": "python-3.12",
+        "detection": { "priority": 94, "package_check": "starlette" }
+      }
+    },
+    {
+      "slug": "streamlit",
+      "name": "Streamlit",
+      "category": "Python",
+      "description": "Interactive Python data applications.",
+      "config": {
+        "runner": "python-3.12",
+        "detection": { "priority": 96, "package_check": "streamlit" }
+      }
+    },
+    {
+      "slug": "gradio",
+      "name": "Gradio",
+      "category": "Python",
+      "description": "Python interfaces for AI applications.",
+      "config": {
+        "runner": "python-3.12",
+        "detection": { "priority": 93, "package_check": "gradio" }
+      }
+    },
+    {
+      "slug": "nextjs",
+      "name": "Next.js",
+      "category": "Node.js",
+      "description": "React applications built with Next.js.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "bun_runner": "bun-1.3",
+        "build_script": "build",
+        "start_script": "start",
+        "output": "server",
+        "detection": { "priority": 120, "any_dependencies": ["next"] }
+      }
+    },
+    {
+      "slug": "nuxt",
+      "name": "Nuxt",
+      "category": "Node.js",
+      "description": "Vue applications built with Nuxt.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "bun_runner": "bun-1.3",
+        "build_script": "build",
+        "start_command": "node .output/server/index.mjs",
+        "output": "server",
+        "detection": { "priority": 120, "any_dependencies": ["nuxt", "nuxt3"] }
+      }
+    },
+    {
+      "slug": "sveltekit",
+      "name": "SvelteKit",
+      "category": "Node.js",
+      "description": "Svelte applications built with SvelteKit.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "bun_runner": "bun-1.3",
+        "build_script": "build",
+        "start_command": "node build",
+        "output": "server",
+        "detection": { "priority": 120, "any_dependencies": ["@sveltejs/kit"] }
+      }
+    },
+    {
+      "slug": "remix",
+      "name": "Remix",
+      "category": "Node.js",
+      "description": "Full-stack React applications built with Remix.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "bun_runner": "bun-1.3",
+        "build_script": "build",
+        "start_script": "start",
+        "start_command": "npx remix-serve build/server/index.js",
+        "output": "server",
+        "detection": { "priority": 118, "any_dependencies": ["@remix-run/node", "@remix-run/serve"] }
+      }
+    },
+    {
+      "slug": "react-router",
+      "name": "React Router",
+      "category": "Node.js",
+      "description": "React Router framework-mode applications.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "bun_runner": "bun-1.3",
+        "build_script": "build",
+        "start_script": "start",
+        "start_command": "npx react-router-serve build/server/index.js",
+        "output": "server",
+        "detection": { "priority": 117, "any_dependencies": ["@react-router/node", "@react-router/serve"] }
+      }
+    },
+    {
+      "slug": "astro",
+      "name": "Astro",
+      "category": "Node.js",
+      "description": "Content-focused applications built with Astro.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "bun_runner": "bun-1.3",
+        "build_script": "build",
+        "output": "static",
+        "output_directory": "dist",
+        "detection": { "priority": 112, "any_dependencies": ["astro"] }
+      }
+    },
+    {
+      "slug": "solidstart",
+      "name": "SolidStart",
+      "category": "Node.js",
+      "description": "Full-stack Solid applications.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "bun_runner": "bun-1.3",
+        "build_script": "build",
+        "start_command": "node .output/server/index.mjs",
+        "output": "server",
+        "detection": { "priority": 111, "any_dependencies": ["@solidjs/start"] }
+      }
+    },
+    {
+      "slug": "docusaurus",
+      "name": "Docusaurus",
+      "category": "Node.js",
+      "description": "Documentation sites built with Docusaurus.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build",
+        "output": "static",
+        "output_directory": "build",
+        "detection": { "priority": 108, "any_dependencies": ["@docusaurus/core"] }
+      }
+    },
+    {
+      "slug": "gatsby",
+      "name": "Gatsby",
+      "category": "Node.js",
+      "description": "React sites built with Gatsby.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build",
+        "output": "static",
+        "output_directory": "public",
+        "detection": { "priority": 106, "any_dependencies": ["gatsby"] }
+      }
+    },
+    {
+      "slug": "qwik",
+      "name": "Qwik",
+      "category": "Node.js",
+      "description": "Resumable web applications built with Qwik.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "bun_runner": "bun-1.3",
+        "build_script": "build",
+        "output": "static",
+        "output_directory": "dist",
+        "detection": { "priority": 105, "any_dependencies": ["@builder.io/qwik"] }
+      }
+    },
+    {
+      "slug": "angular",
+      "name": "Angular",
+      "category": "Node.js",
+      "description": "Web applications built with Angular.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build",
+        "output": "static",
+        "output_directory": "dist",
+        "detection": { "priority": 105, "any_dependencies": ["@angular/core"], "all_files": ["angular.json"] }
+      }
+    },
+    {
+      "slug": "vitepress",
+      "name": "VitePress",
+      "category": "Node.js",
+      "description": "Documentation sites built with VitePress.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build",
+        "output": "static",
+        "output_directory": ".vitepress/dist",
+        "detection": { "priority": 104, "any_dependencies": ["vitepress"] }
+      }
+    },
+    {
+      "slug": "eleventy",
+      "name": "Eleventy",
+      "category": "Node.js",
+      "description": "Static sites built with Eleventy.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build",
+        "output": "static",
+        "output_directory": "_site",
+        "detection": { "priority": 101, "any_dependencies": ["@11ty/eleventy"] }
+      }
+    },
+    {
+      "slug": "nestjs",
+      "name": "NestJS",
+      "category": "Node.js",
+      "description": "Structured Node.js APIs built with NestJS.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build",
+        "start_script": "start:prod",
+        "start_command": "node dist/main.js",
+        "output": "server",
+        "detection": { "priority": 100, "any_dependencies": ["@nestjs/core"] }
+      }
+    },
+    {
+      "slug": "cra",
+      "name": "Create React App",
+      "category": "Node.js",
+      "description": "React single-page applications built with react-scripts.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build",
+        "output": "static",
+        "output_directory": "build",
+        "detection": { "priority": 96, "any_dependencies": ["react-scripts"] }
+      }
+    },
+    {
+      "slug": "vue-cli",
+      "name": "Vue CLI",
+      "category": "Node.js",
+      "description": "Vue applications built with Vue CLI.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build",
+        "output": "static",
+        "output_directory": "dist",
+        "detection": { "priority": 96, "any_dependencies": ["@vue/cli-service"] }
+      }
+    },
+    {
+      "slug": "storybook",
+      "name": "Storybook",
+      "category": "Node.js",
+      "description": "Component documentation built with Storybook.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build-storybook",
+        "output": "static",
+        "output_directory": "storybook-static",
+        "detection": { "priority": 94, "any_dependencies": ["storybook", "@storybook/react", "@storybook/vue3", "@storybook/svelte"] }
+      }
+    },
+    {
+      "slug": "ember",
+      "name": "Ember",
+      "category": "Node.js",
+      "description": "Web applications built with Ember CLI.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build",
+        "output": "static",
+        "output_directory": "dist",
+        "detection": { "priority": 93, "any_dependencies": ["ember-cli"] }
+      }
+    },
+    {
+      "slug": "hexo",
+      "name": "Hexo",
+      "category": "Node.js",
+      "description": "Static blogs built with Hexo.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build",
+        "output": "static",
+        "output_directory": "public",
+        "detection": { "priority": 92, "any_dependencies": ["hexo"] }
+      }
+    },
+    {
+      "slug": "adonisjs",
+      "name": "AdonisJS",
+      "category": "Node.js",
+      "description": "Node.js web applications built with AdonisJS.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build",
+        "start_script": "start",
+        "output": "server",
+        "detection": { "priority": 91, "any_dependencies": ["@adonisjs/core"] }
+      }
+    },
+    {
+      "slug": "strapi",
+      "name": "Strapi",
+      "category": "Node.js",
+      "description": "Headless CMS applications built with Strapi.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build",
+        "start_script": "start",
+        "output": "server",
+        "detection": { "priority": 90, "any_dependencies": ["@strapi/strapi"] }
+      }
+    },
+    {
+      "slug": "payload",
+      "name": "Payload CMS",
+      "category": "Node.js",
+      "description": "Applications built with Payload CMS.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build",
+        "start_script": "start",
+        "output": "server",
+        "detection": { "priority": 90, "any_dependencies": ["payload"] }
+      }
+    },
+    {
+      "slug": "keystone",
+      "name": "Keystone",
+      "category": "Node.js",
+      "description": "Headless applications built with Keystone.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "build_script": "build",
+        "start_script": "start",
+        "output": "server",
+        "detection": { "priority": 89, "any_dependencies": ["@keystone-6/core"] }
+      }
+    },
+    {
+      "slug": "hono",
+      "name": "Hono",
+      "category": "Node.js",
+      "description": "Fast web APIs built with Hono.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "bun_runner": "bun-1.3",
+        "start_script": "start",
+        "output": "server",
+        "detection": { "priority": 88, "any_dependencies": ["@hono/node-server", "hono"] }
+      }
+    },
+    {
+      "slug": "fastify",
+      "name": "Fastify",
+      "category": "Node.js",
+      "description": "Node.js APIs built with Fastify.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "start_script": "start",
+        "output": "server",
+        "detection": { "priority": 87, "any_dependencies": ["fastify"] }
+      }
+    },
+    {
+      "slug": "express",
+      "name": "Express",
+      "category": "Node.js",
+      "description": "Node.js web applications built with Express.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "start_script": "start",
+        "output": "server",
+        "detection": { "priority": 86, "any_dependencies": ["express"] }
+      }
+    },
+    {
+      "slug": "vite",
+      "name": "Vite",
+      "category": "Node.js",
+      "description": "Static applications built with Vite.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "bun_runner": "bun-1.3",
+        "build_script": "build",
+        "output": "static",
+        "output_directory": "dist",
+        "detection": { "priority": 80, "any_dependencies": ["vite"], "any_files": ["vite.config.*"] }
+      }
+    },
+    {
+      "slug": "static",
+      "name": "Static site",
+      "category": "Node.js",
+      "description": "HTML, CSS, and JavaScript served as a static site.",
+      "config": {
+        "runner": "node-24",
+        "modern_runner": "node-24",
+        "output": "static",
+        "output_directory": ".",
+        "detection": { "priority": 10, "any_files": ["index.html"] }
+      }
+    }
+  ]
+}

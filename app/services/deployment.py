@@ -125,6 +125,9 @@ class DeploymentService:
 
         runtime_vars: dict[str, str] = {
             "DEVPUSH": "true",
+            "PORT": "8000",
+            "HOST": "0.0.0.0",
+            "HOSTNAME": "0.0.0.0",
             "DEVPUSH_URL": deployment.url,
             "DEVPUSH_DOMAIN": deployment.hostname,
             "DEVPUSH_TEAM_ID": project.team_id,
