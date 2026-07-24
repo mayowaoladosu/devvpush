@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     job_timeout_seconds: int = 320
     job_completion_wait_seconds: int = 300
     deployment_timeout_seconds: int = 300
+    deployment_schedule_lock_seconds: int = 120
+    deployment_schedule_wait_seconds: int = 15
+    deployment_abort_timeout_seconds: int = 5
     dockerfile_build_timeout_seconds: int = 900
     dockerfile_image_load_timeout_seconds: int = 300
     dockerfile_build_max_concurrency: int = 2
@@ -168,6 +171,15 @@ def get_settings():
 
     settings.dockerfile_build_timeout_seconds = max(
         1, settings.dockerfile_build_timeout_seconds
+    )
+    settings.deployment_schedule_lock_seconds = max(
+        1, settings.deployment_schedule_lock_seconds
+    )
+    settings.deployment_schedule_wait_seconds = max(
+        1, settings.deployment_schedule_wait_seconds
+    )
+    settings.deployment_abort_timeout_seconds = max(
+        1, settings.deployment_abort_timeout_seconds
     )
     settings.dockerfile_image_load_timeout_seconds = max(
         1, settings.dockerfile_image_load_timeout_seconds

@@ -20,7 +20,7 @@ This document describes the high‑level architecture of /dev/push, how the main
 ## Overview
 
 - **App**: The app handles all of the user-facing logic (managing teams/projects, authenticating, searching logs...). It communicates with the workers via Redis.
-- **Workers**: When we create a new deployment, we queue a deploy job using arq (`app/workers/jobs.py`). It will start a container, then delegate monitoring to a separate background worker (`app/workers/monitor.py`), before wrapping things back with yet another job. These workers are also used to run certain batch jobs (e.g. deleting a team, cleaning up inactive deployments and their containers). Deployment lifecycle statuses: `prepare → deploy → finalize → completed` (with `conclusion`: succeeded/failed/canceled/skipped; `fail` is transient for failure handling).
+- **Workers**: Scheduling is serialized by project environment before an arq job is created. Webhook deliveries are idempotent and newest-commit-wins: older webhook jobs in `prepare` or `deploy` become skipped and are aborted/cleaned, while manual deploys are never superseded. The jobs worker starts a container, the monitor worker probes readiness, and the finalizer promotes aliases under the same environment lock. Deployment lifecycle statuses: `prepare → deploy → finalize → completed` (with `conclusion`: succeeded/failed/canceled/skipped; `fail` is transient for failure handling).
 - **Logs**: build and runtime logs are streamed from Loki and served to the user via an SSE endpoint in the app.
 - **Runners**: Zero-config apps run inside language containers pulled from the registry catalog. Dockerfile apps are built into immutable per-deployment images and run their image-defined command.
 - **BuildKit**: Only the jobs worker can reach the rootless daemon over a group-restricted Unix socket. BuildKit has persistent layer cache, a private internal network, a read-only root filesystem, bounded resources, and no host Docker socket or control-plane network membership. Public dependency traffic crosses a separate filtered-egress proxy.
@@ -159,8 +159,8 @@ Notes:
 ## Deployment Flow
 
 1) Trigger
-  - Webhook: GitHub -> `/api/github/webhook` (verify, resolve project) -> create DB record -> enqueue `start_deployment`.
-  - Manual: user selects commit/env -> create DB record -> enqueue `start_deployment`.
+  - Webhook: GitHub -> `/api/github/webhook` (verify signature and delivery ID, resolve project) -> lock the environment -> deduplicate the delivery -> create/enqueue the replacement -> mark older active webhook deployments skipped -> abort and clean them. Partial scheduling failures return `500`; GitHub redelivery safely reuses completed scheduling work.
+  - Manual: user selects commit/env -> lock the environment -> create DB record -> enqueue `start_deployment`. Manual work does not participate in webhook supersession.
 
 2) `start_deployment`
   - Zero-config: create a language runner, clone the selected commit, run optional build/pre-deploy commands, then start the app.
@@ -174,6 +174,7 @@ Notes:
 
 4) Finalize:
   a) finalize_deployment (success)
+    - Acquire the environment scheduling lock and leave aliases unchanged if a newer deployment already succeeded.
     - Mark `status=completed`, `conclusion=succeeded`.
     - Create/update aliases: branch, environment, environment_id.
     - Regenerate Traefik dynamic config for aliases and custom domains.

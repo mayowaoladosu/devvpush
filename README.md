@@ -10,7 +10,7 @@ An open-source and self-hostable alternative to Vercel, Render, Netlify and the 
 
 ## Key features
 
-- **Git-based deployments**: Push to deploy from GitHub with zero-downtime rollouts and instant rollback.
+- **Git-based deployments**: Push to deploy from GitHub with newest-commit-wins scheduling, zero-downtime rollouts, cancellation, and instant rollback.
 - **Multi-language support**: Python, Node.js, PHP... basically anything that can run on Docker.
 - **Native Dockerfiles**: Build repository Dockerfiles with cached, rootless BuildKit and run the resulting image command.
 - **Environment management**: Multiple environments with branch mapping and encrypted environment variables.
@@ -100,6 +100,15 @@ variables are runtime-only for Dockerfile projects and are never sent as build
 arguments or build secrets. The resulting per-deployment image must define `CMD`
 or `ENTRYPOINT`, declare a non-root `USER`, and listen on `0.0.0.0:8000`.
 
+Webhook deployments are serialized per project environment. GitHub delivery IDs
+make redelivery idempotent, while each newer push marks older
+queued or starting webhook deployments as skipped, aborts their jobs with a
+bounded wait, and cleans up their containers and managed images. Manual deploys
+are deliberate and are never superseded. Finalizers use the same environment
+lock so an older commit cannot reclaim an alias after a newer deployment wins.
+If any project mapped to a repository cannot schedule, the webhook returns a
+retryable failure; projects already scheduled by that delivery are reused.
+
 **Key scripts**:
 
 - `./scripts/start.sh` / `stop.sh` / `restart.sh` — manage the full stack or selected components (`--components <csv>`)
@@ -182,6 +191,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for codebase structure.
 | `JOB_TIMEOUT_SECONDS`               | Job timeout (seconds). Default: `320`.                                                                                                   |
 | `JOB_MAX_TRIES`                     | Max retries per background job. Default: `3`.                                                                                            |
 | `DEPLOYMENT_TIMEOUT_SECONDS`        | Deployment timeout (seconds). Default: `300`.                                                                                            |
+| `DEPLOYMENT_SCHEDULE_LOCK_SECONDS`  | Lease duration for serializing scheduling and alias promotion per environment. Default: `120`.                                          |
+| `DEPLOYMENT_SCHEDULE_WAIT_SECONDS`  | Maximum wait to acquire an environment scheduling lock. Default: `15`.                                                                   |
+| `DEPLOYMENT_ABORT_TIMEOUT_SECONDS`  | Maximum wait for a superseded or canceled job to acknowledge abort. Default: `5`.                                                       |
 | `DOCKERFILE_BUILD_TIMEOUT_SECONDS`  | Maximum Dockerfile build duration. Default: `900`.                                                                                       |
 | `DOCKERFILE_IMAGE_LOAD_TIMEOUT_SECONDS` | Maximum idle time for loading a built image into Docker. Default: `300`.                                                            |
 | `DOCKERFILE_BUILD_MAX_CONCURRENCY`  | Maximum concurrent Dockerfile builds per jobs worker. Default: `2`.                                                                     |

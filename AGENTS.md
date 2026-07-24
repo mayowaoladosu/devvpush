@@ -159,6 +159,7 @@ These guidelines apply to every script under `scripts/` (install/start/stop/rest
 3. **Tasks**: `app/workers/tasks/` - Individual task implementations (deploy, cleanup, etc.)
 4. **Job queue**: Access via `get_queue()` dependency (returns `ArqRedis` connection)
 5. **Development reloads**: Do not add ARQ `--watch` to the jobs worker. Builds are long-running and must not be interrupted by source-file changes; restart `worker-jobs` explicitly after job-code edits.
+6. **Deployment scheduling**: Queue deployments only through `DeploymentService.schedule()`. Webhook scheduling is delivery-ID-idempotent and newest-commit-wins per project/environment; partial webhook failures must stay retryable, and manual deploys must never be auto-superseded. Worker checkpoints and finalizers must preserve existing terminal conclusions.
 
 ### Code Style
 

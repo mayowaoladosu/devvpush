@@ -54,7 +54,7 @@
       @deployment-logs-closed.window="deploymentLogsClosed = true"
     >
       <div class="absolute inset-0 hidden only:flex items-center justify-center text-muted-foreground" id="deployment-logs-placeholder">
-        {% if deployment.conclusion != 'succeeded' and deployment.error and deployment.error.status == 'prepare' %}
+        {% if deployment.conclusion == 'skipped' or (deployment.conclusion != 'succeeded' and deployment.error and deployment.error.status == 'prepare') %}
           <div class="flex items-center gap-x-2 [&>svg]:size-4">
             {% include "icons/ban.svg" %}
             {{ _('No logs found') }}

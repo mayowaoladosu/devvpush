@@ -413,12 +413,16 @@ async def _verify_github_webhook(
 
     signature = request.headers.get("X-Hub-Signature-256")
     event = request.headers.get("X-GitHub-Event")
+    delivery_id = str(request.headers.get("X-GitHub-Delivery") or "").strip()
 
     if not signature:
         raise HTTPException(status_code=401, detail="Missing signature")
 
     if not event:
         raise HTTPException(status_code=400, detail="Missing event type")
+
+    if not delivery_id or len(delivery_id) > 255:
+        raise HTTPException(status_code=400, detail="Invalid delivery ID")
 
     payload = await request.body()
     secret = settings.github_app_webhook_secret.encode()
@@ -564,6 +568,7 @@ async def github_webhook(
                 )  # Convert refs/heads/main to main
                 commit_data = {
                     "sha": data["after"],
+                    "provider_event_id": request.headers.get("X-GitHub-Delivery"),
                     "author": {"login": data["pusher"]["name"]},
                     "commit": {
                         "message": data["head_commit"]["message"],
@@ -572,30 +577,40 @@ async def github_webhook(
                 }
 
                 deployment_service = DeploymentService()
+                failed_projects = []
 
                 for project in projects:
                     try:
-                        deployment = await deployment_service.create(
+                        deployment = await deployment_service.schedule(
                             project=project,
                             branch=branch,
                             commit=commit_data,
                             db=db,
                             redis_client=redis_client,
+                            queue=queue,
                             trigger="webhook",
                         )
-                        job = await queue.enqueue_job("start_deployment", deployment.id)
-                        deployment.job_id = job.job_id
-                        await db.commit()
 
                         logger.info(
-                            f"Deployment {deployment.id} created for commit {commit_data['sha']} on project {project.name}"
+                            f"Deployment {deployment.id} scheduled for commit {commit_data['sha']} on project {project.name}"
                         )
                     except Exception as e:
+                        await db.rollback()
+                        failed_projects.append(project.id)
                         logger.error(
                             f"Failed to create deployment for project {project.name}: {str(e)}",
                             exc_info=True,
                         )
                         continue
+
+                if failed_projects:
+                    logger.error(
+                        "GitHub delivery %s could not schedule %s project(s); "
+                        "requesting redelivery.",
+                        commit_data["provider_event_id"],
+                        len(failed_projects),
+                    )
+                    return Response(status_code=500)
 
             case "pull_request":
                 # TODO: Add logic for PRs

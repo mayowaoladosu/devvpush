@@ -1068,17 +1068,15 @@ async def project_deploy(
                 branch=branch,
             )
 
-            deployment = await DeploymentService().create(
+            deployment = await DeploymentService().schedule(
                 project=project,
                 branch=branch,
                 commit=commit,
                 current_user=current_user,
                 db=db,
                 redis_client=redis_client,
+                queue=queue,
             )
-            job = await queue.enqueue_job("start_deployment", deployment.id)
-            deployment.job_id = job.job_id
-            await db.commit()
 
             flash(
                 request,
@@ -1222,17 +1220,15 @@ async def project_redeploy(
                 branch=deployment.branch,
             )
 
-            new_deployment = await DeploymentService().create(
+            new_deployment = await DeploymentService().schedule(
                 project=project,
                 branch=deployment.branch,
                 commit=commit,
                 current_user=current_user,
                 db=db,
                 redis_client=redis_client,
+                queue=queue,
             )
-            job = await queue.enqueue_job("start_deployment", new_deployment.id)
-            new_deployment.job_id = job.job_id
-            await db.commit()
 
             flash(
                 request,
@@ -2172,6 +2168,8 @@ async def project_deployment(
                 flash(request, _("Deployment succeeded."), "success")
             elif deployment.conclusion == "canceled":
                 flash(request, _("Deployment canceled."), "warning")
+            elif deployment.conclusion == "skipped":
+                flash(request, _("Deployment skipped for a newer push."), "warning")
             else:
                 flash(request, _("Deployment failed."), "error")
         return TemplateResponse(

@@ -112,6 +112,49 @@ async def _cleanup_startup_resources(
         )
 
 
+async def _cleanup_if_concluded(
+    *,
+    db,
+    deployment: Deployment,
+    container,
+    image_reference: str | None,
+    settings,
+    loki: LokiService | None,
+) -> bool:
+    """Stop startup if another request already concluded the deployment."""
+    await db.refresh(
+        deployment,
+        attribute_names=["status", "conclusion", "error", "container_status"],
+    )
+    if not deployment.conclusion:
+        return False
+
+    await _cleanup_startup_resources(
+        deployment=deployment,
+        container=container,
+        image_reference=image_reference,
+        settings=settings,
+        loki=loki,
+    )
+    await DeploymentService.update_status(
+        db,
+        deployment,
+        status="completed",
+        container_status=(
+            "removed"
+            if container or deployment.container_id
+            else deployment.container_status
+        ),
+        emit=False,
+    )
+    logger.info(
+        "[DeployStart:%s] Startup stopped after terminal conclusion %s.",
+        deployment.id,
+        deployment.conclusion,
+    )
+    return True
+
+
 async def start_deployment(ctx, deployment_id: str):
     """Starts a deployment."""
     settings = get_settings()
@@ -137,6 +180,14 @@ async def start_deployment(ctx, deployment_id: str):
             ).scalar_one()
             loki = LokiService()
 
+            if deployment.conclusion:
+                logger.info(
+                    "%s Deployment already concluded (%s); skipping startup.",
+                    log_prefix,
+                    deployment.conclusion,
+                )
+                return
+
             container = None
             async with aiodocker.Docker(url=settings.docker_host) as docker_client:
                 # Mark deployment as in-progress
@@ -146,6 +197,16 @@ async def start_deployment(ctx, deployment_id: str):
                     status="prepare",
                     redis_client=redis_client,
                 )
+
+                if await _cleanup_if_concluded(
+                    db=db,
+                    deployment=deployment,
+                    container=container,
+                    image_reference=managed_image_reference,
+                    settings=settings,
+                    loki=loki,
+                ):
+                    return
 
                 # Prepare environment variables
                 env_vars_dict = DeploymentService().get_runtime_env_vars(
@@ -332,6 +393,16 @@ async def start_deployment(ctx, deployment_id: str):
                 if not runner_image:
                     raise ValueError("Runner image not found for deployment.")
 
+                if await _cleanup_if_concluded(
+                    db=db,
+                    deployment=deployment,
+                    container=container,
+                    image_reference=managed_image_reference,
+                    settings=settings,
+                    loki=loki,
+                ):
+                    return
+
                 await _push_loki_log(
                     loki,
                     deployment,
@@ -460,7 +531,28 @@ async def start_deployment(ctx, deployment_id: str):
 
                 deployment.container_id = container.id
                 await db.commit()
+
+                if await _cleanup_if_concluded(
+                    db=db,
+                    deployment=deployment,
+                    container=container,
+                    image_reference=managed_image_reference,
+                    settings=settings,
+                    loki=loki,
+                ):
+                    return
+
                 await container.start()
+
+                if await _cleanup_if_concluded(
+                    db=db,
+                    deployment=deployment,
+                    container=container,
+                    image_reference=managed_image_reference,
+                    settings=settings,
+                    loki=loki,
+                ):
+                    return
 
                 # Save container info
                 failure_stage = "deploy"
@@ -505,15 +597,23 @@ async def start_deployment(ctx, deployment_id: str):
 
             try:
                 async with AsyncSessionLocal() as db:
-                    deployment = await db.get(Deployment, deployment_id)
-                    if deployment:
+                    current_deployment = await db.get(Deployment, deployment_id)
+                    if current_deployment:
+                        values = {
+                            "status": "completed",
+                            "container_status": (
+                                "removed"
+                                if current_deployment.container_status == "removed"
+                                else "stopped"
+                            ),
+                            "redis_client": get_redis_client(),
+                        }
+                        if not current_deployment.conclusion:
+                            values["conclusion"] = "canceled"
                         await DeploymentService.update_status(
                             db,
-                            deployment,
-                            status="completed",
-                            conclusion="canceled",
-                            container_status="stopped",
-                            redis_client=get_redis_client(),
+                            current_deployment,
+                            **values,
                         )
             except Exception as e:
                 logger.error(f"{log_prefix} Error updating deployment status: {e}")
@@ -584,34 +684,60 @@ async def finalize_deployment(ctx, deployment_id: str):
                 )
             ).scalar_one()
 
-            if deployment.conclusion == "canceled":
-                logger.info(
-                    "%s Deployment already canceled; skipping finalize.", log_prefix
-                )
-                return
-
-            await DeploymentService().setup_aliases(deployment, db, settings)
-            await db.commit()
-
-            # Update Traefik dynamic config
-            try:
-                await DeploymentService().update_traefik_config(
-                    deployment.project,
-                    db,
-                    settings,
-                    include_deployment_ids={deployment.id},
-                )
-            except Exception as e:
-                logger.error(f"{log_prefix} Failed to update Traefik config: {e}")
-
-            await service.update_status(
-                db,
-                deployment,
-                status="completed",
-                conclusion="succeeded",
-                error=None,
-                redis_client=redis_client,
+            lock = service.environment_lock(
+                redis_client,
+                deployment.project_id,
+                deployment.environment_id,
             )
+            async with lock:
+                await db.refresh(
+                    deployment,
+                    attribute_names=["status", "conclusion", "error"],
+                )
+                if deployment.conclusion:
+                    logger.info(
+                        "%s Deployment already concluded (%s); skipping finalize.",
+                        log_prefix,
+                        deployment.conclusion,
+                    )
+                    return
+
+                newer_is_current = (
+                    await service.has_newer_successful_deployment(
+                        deployment, db
+                    )
+                )
+                if not newer_is_current:
+                    await service.setup_aliases(deployment, db, settings)
+                    await db.commit()
+
+                    # Update Traefik dynamic config
+                    try:
+                        await service.update_traefik_config(
+                            deployment.project,
+                            db,
+                            settings,
+                            include_deployment_ids={deployment.id},
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"{log_prefix} Failed to update Traefik config: {e}"
+                        )
+                else:
+                    logger.info(
+                        "%s Newer successful deployment already owns routing; "
+                        "leaving aliases unchanged.",
+                        log_prefix,
+                    )
+
+                await service.update_status(
+                    db,
+                    deployment,
+                    status="completed",
+                    conclusion="succeeded",
+                    error=None,
+                    redis_client=redis_client,
+                )
 
             # Cleanup inactive deployments
             queue: ArqRedis = ctx["redis"]

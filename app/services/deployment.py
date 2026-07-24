@@ -10,7 +10,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from redis.asyncio import Redis
 from arq.connections import ArqRedis
-from arq.jobs import Job
+from arq.jobs import Job, JobStatus
 
 from models import Deployment, Alias, Project, User, Domain, Storage, StorageProject
 from utils.environment import get_environment_for_branch
@@ -33,6 +33,21 @@ class DeploymentService:
         return not cls.uses_dockerfile(config)
 
     @staticmethod
+    def schedule_lock_key(project_id: str, environment_id: str) -> str:
+        return f"lock:deployment-schedule:{project_id}:{environment_id}"
+
+    @classmethod
+    def environment_lock(
+        cls, redis_client: Redis, project_id: str, environment_id: str
+    ):
+        settings = get_settings()
+        return redis_client.lock(
+            cls.schedule_lock_key(project_id, environment_id),
+            timeout=settings.deployment_schedule_lock_seconds,
+            blocking_timeout=settings.deployment_schedule_wait_seconds,
+        )
+
+    @staticmethod
     async def update_status(
         db: AsyncSession,
         deployment: Deployment,
@@ -43,12 +58,40 @@ class DeploymentService:
         container_status: str | None = None,
         redis_client: Redis | None = None,
         emit: bool = True,
-    ) -> None:
+    ) -> bool:
+        await db.refresh(
+            deployment,
+            attribute_names=["status", "conclusion", "error", "container_status"],
+            with_for_update=True,
+        )
         now = datetime.now(timezone.utc)
-        if status is not None:
-            deployment.status = status
-        if conclusion is not None:
-            deployment.conclusion = conclusion
+        existing_conclusion = deployment.conclusion
+        applied_status = status
+        applied_conclusion = conclusion
+        status_for_event = status
+
+        if existing_conclusion:
+            if conclusion and conclusion != existing_conclusion:
+                logger.info(
+                    "Preserving terminal conclusion %s for deployment %s; "
+                    "ignoring transition to %s.",
+                    existing_conclusion,
+                    deployment.id,
+                    conclusion,
+                )
+            applied_conclusion = None
+            status_for_event = None
+            if status not in {None, "completed"}:
+                applied_status = None
+            if container_status == "running":
+                container_status = None
+            if error is not None:
+                error = None
+
+        if applied_status is not None:
+            deployment.status = applied_status
+        if applied_conclusion is not None:
+            deployment.conclusion = applied_conclusion
             deployment.concluded_at = now.replace(tzinfo=None)
             if deployment.project:
                 deployment.project.updated_at = now.replace(tzinfo=None)
@@ -59,8 +102,10 @@ class DeploymentService:
 
         await db.commit()
 
-        if emit and redis_client and (status or conclusion):
-            status_value = conclusion if conclusion else status
+        if emit and redis_client and (status_for_event or applied_conclusion):
+            status_value = (
+                applied_conclusion if applied_conclusion else status_for_event
+            )
             fields = {
                 "event_type": "deployment_status_update",
                 "project_id": deployment.project_id,
@@ -68,13 +113,22 @@ class DeploymentService:
                 "deployment_status": status_value,
                 "timestamp": now.isoformat(),
             }
-            await redis_client.xadd(
-                f"stream:project:{deployment.project_id}:deployment:{deployment.id}:status",
-                fields,
-            )
-            await redis_client.xadd(
-                f"stream:project:{deployment.project_id}:updates", fields
-            )
+            try:
+                await redis_client.xadd(
+                    f"stream:project:{deployment.project_id}:deployment:{deployment.id}:status",
+                    fields,
+                )
+                await redis_client.xadd(
+                    f"stream:project:{deployment.project_id}:updates", fields
+                )
+            except Exception:
+                logger.warning(
+                    "Could not emit status update for deployment %s.",
+                    deployment.id,
+                    exc_info=True,
+                )
+
+        return bool(applied_status or applied_conclusion or container_status)
 
     def get_alias_domains(
         self, deployment: Deployment, settings: Settings
@@ -461,16 +515,21 @@ class DeploymentService:
         )
         date = datetime.fromisoformat(date_raw.replace("Z", "+00:00")).isoformat()
 
+        commit_meta = {
+            "author": author,
+            "message": message,
+            "date": date,
+        }
+        provider_event_id = str(commit.get("provider_event_id") or "").strip()
+        if provider_event_id:
+            commit_meta["provider_event_id"] = provider_event_id[:255]
+
         deployment = Deployment(
             project=project,
             environment_id=environment.get("id", ""),
             branch=branch,
             commit_sha=commit["sha"],
-            commit_meta={
-                "author": author,
-                "message": message,
-                "date": date,
-            },
+            commit_meta=commit_meta,
             image=runner_image,
             trigger=trigger,
             created_by_user_id=current_user.id
@@ -480,22 +539,321 @@ class DeploymentService:
         db.add(deployment)
         await db.commit()
 
-        await redis_client.xadd(
-            f"stream:project:{project.id}:updates",
-            fields={
-                "event_type": "deployment_creation",
-                "project_id": project.id,
-                "deployment_id": deployment.id,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            },
-        )
+        try:
+            await redis_client.xadd(
+                f"stream:project:{project.id}:updates",
+                fields={
+                    "event_type": "deployment_creation",
+                    "project_id": project.id,
+                    "deployment_id": deployment.id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                },
+            )
+        except Exception:
+            logger.warning(
+                "Could not emit creation event for deployment %s.",
+                deployment.id,
+                exc_info=True,
+            )
 
         logger.info(
-            f"Deployment {deployment.id} created and queued for "
+            f"Deployment {deployment.id} created for "
             f"project {project.name} ({project.id}) to environment {environment.get('name')} ({environment.get('id')})"
         )
 
         return deployment
+
+    async def schedule(
+        self,
+        project: Project,
+        branch: str,
+        commit: dict,
+        db: AsyncSession,
+        redis_client: Redis,
+        queue: ArqRedis,
+        trigger: str = "user",
+        current_user: User | None = None,
+    ) -> Deployment:
+        """Create and queue one deployment under an environment-scoped lock."""
+        environment = get_environment_for_branch(branch, project.active_environments)
+        if not environment:
+            raise ValueError("No environment found for this branch.")
+
+        lock = self.environment_lock(redis_client, project.id, environment["id"])
+        superseded: list[Deployment] = []
+
+        async with lock:
+            provider_event_id = str(commit.get("provider_event_id") or "").strip()
+            if trigger == "webhook" and provider_event_id:
+                existing = await self._find_webhook_deployment(
+                    project_id=project.id,
+                    environment_id=environment["id"],
+                    branch=branch,
+                    provider_event_id=provider_event_id,
+                    db=db,
+                )
+                if existing:
+                    await self._ensure_start_job(existing, db, queue)
+                    logger.info(
+                        "Ignoring duplicate webhook deployment for %s at %s (%s)",
+                        project.id,
+                        provider_event_id,
+                        existing.id,
+                    )
+                    return existing
+
+            deployment = await self.create(
+                project=project,
+                branch=branch,
+                commit=commit,
+                db=db,
+                redis_client=redis_client,
+                trigger=trigger,
+                current_user=current_user,
+            )
+
+            try:
+                await self._ensure_start_job(deployment, db, queue)
+            except Exception:
+                await self.update_status(
+                    db,
+                    deployment,
+                    status="completed",
+                    conclusion="failed",
+                    error={
+                        "status": "queue",
+                        "message": "Deployment could not be added to the build queue.",
+                    },
+                    redis_client=redis_client,
+                )
+                raise
+
+            if trigger == "webhook":
+                superseded = await self._mark_superseded_webhook_deployments(
+                    replacement=deployment,
+                    db=db,
+                    redis_client=redis_client,
+                    queue=queue,
+                )
+
+        for outdated in superseded:
+            await self._abort_job(outdated, queue)
+            await self._stop_container(outdated, db)
+
+        return deployment
+
+    @staticmethod
+    async def _ensure_start_job(
+        deployment: Deployment, db: AsyncSession, queue: ArqRedis
+    ) -> None:
+        if deployment.conclusion:
+            return
+        if not deployment.job_id:
+            deployment.job_id = deployment.id
+            await db.commit()
+
+        job = await queue.enqueue_job(
+            "start_deployment",
+            deployment.id,
+            _job_id=deployment.job_id,
+        )
+        if job is not None:
+            return
+
+        status = await Job(job_id=deployment.job_id, redis=queue).status()
+        if status == JobStatus.not_found:
+            raise RuntimeError("Deployment queue rejected the job.")
+
+    @staticmethod
+    async def has_newer_successful_deployment(
+        deployment: Deployment, db: AsyncSession
+    ) -> bool:
+        if deployment.trigger != "webhook":
+            return False
+        result = await db.execute(
+            select(Deployment.id)
+            .where(
+                Deployment.project_id == deployment.project_id,
+                Deployment.environment_id == deployment.environment_id,
+                Deployment.branch == deployment.branch,
+                Deployment.created_at > deployment.created_at,
+                Deployment.conclusion == "succeeded",
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none() is not None
+
+    @staticmethod
+    async def _find_webhook_deployment(
+        *,
+        project_id: str,
+        environment_id: str,
+        branch: str,
+        provider_event_id: str,
+        db: AsyncSession,
+    ) -> Deployment | None:
+        result = await db.execute(
+            select(Deployment)
+            .where(
+                Deployment.project_id == project_id,
+                Deployment.environment_id == environment_id,
+                Deployment.branch == branch,
+                Deployment.trigger == "webhook",
+                Deployment.commit_meta["provider_event_id"].as_string()
+                == provider_event_id,
+            )
+            .order_by(Deployment.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
+    async def _mark_superseded_webhook_deployments(
+        self,
+        *,
+        replacement: Deployment,
+        db: AsyncSession,
+        redis_client: Redis,
+        queue: ArqRedis,
+    ) -> list[Deployment]:
+        result = await db.execute(
+            select(Deployment)
+            .where(
+                Deployment.project_id == replacement.project_id,
+                Deployment.environment_id == replacement.environment_id,
+                Deployment.branch == replacement.branch,
+                Deployment.trigger == "webhook",
+                Deployment.id != replacement.id,
+                Deployment.conclusion.is_(None),
+                Deployment.status.in_(["prepare", "deploy"]),
+            )
+            .order_by(Deployment.created_at.asc())
+        )
+        outdated = list(result.scalars().all())
+        settings = get_settings()
+
+        for deployment in outdated:
+            await self.update_status(
+                db,
+                deployment,
+                status="completed",
+                conclusion="skipped",
+                error={
+                    "status": "superseded",
+                    "message": (
+                        f"Skipped because deployment {replacement.id[:7]} contains "
+                        "a newer push for this branch."
+                    ),
+                    "deployment_id": replacement.id,
+                    "commit_sha": replacement.commit_sha,
+                },
+                redis_client=redis_client,
+            )
+            try:
+                await queue.enqueue_job(
+                    "delete_container",
+                    deployment.id,
+                    _defer_by=settings.container_delete_grace_seconds,
+                )
+            except Exception:
+                logger.warning(
+                    "Could not queue cleanup for superseded deployment %s.",
+                    deployment.id,
+                    exc_info=True,
+                )
+
+        if outdated:
+            logger.info(
+                "Deployment %s superseded %s older webhook deployment(s).",
+                replacement.id,
+                len(outdated),
+            )
+        return outdated
+
+    @staticmethod
+    async def _abort_job(deployment: Deployment, queue: ArqRedis) -> bool:
+        if not deployment.job_id:
+            return False
+        try:
+            job = Job(job_id=deployment.job_id, redis=queue)
+            job_info = await job.info()
+            if not job_info or job_info.success is not None:
+                return False
+            aborted = await job.abort(
+                timeout=get_settings().deployment_abort_timeout_seconds,
+                poll_delay=0.1,
+            )
+            if not aborted:
+                logger.warning(
+                    "Abort was not acknowledged for deployment %s.", deployment.id
+                )
+            return aborted
+        except TimeoutError:
+            logger.warning(
+                "Timed out waiting for deployment %s to abort.", deployment.id
+            )
+        except Exception:
+            logger.warning(
+                "Could not abort deployment job %s.", deployment.id, exc_info=True
+            )
+        return False
+
+    @staticmethod
+    async def _stop_container(deployment: Deployment, db: AsyncSession) -> None:
+        if not deployment.container_id or deployment.container_status in {
+            "removed",
+            "stopped",
+        }:
+            return
+        try:
+            async with aiodocker.Docker(
+                url=get_settings().docker_host
+            ) as docker_client:
+                container = await docker_client.containers.get(deployment.container_id)
+                try:
+                    await container.stop()
+                except Exception:
+                    pass
+                await DeploymentService.update_status(
+                    db,
+                    deployment,
+                    container_status="stopped",
+                    emit=False,
+                )
+        except aiodocker.DockerError as error:
+            if error.status == 404:
+                await DeploymentService.update_status(
+                    db,
+                    deployment,
+                    container_status="removed",
+                    emit=False,
+                )
+            else:
+                logger.warning(
+                    "Could not stop deployment container %s: %s",
+                    deployment.id,
+                    error,
+                )
+        except Exception:
+            logger.warning(
+                "Could not stop deployment container %s.",
+                deployment.id,
+                exc_info=True,
+            )
+
+    @staticmethod
+    async def _queue_cleanup(deployment: Deployment, queue: ArqRedis) -> None:
+        try:
+            await queue.enqueue_job(
+                "delete_container",
+                deployment.id,
+                _defer_by=get_settings().container_delete_grace_seconds,
+            )
+        except Exception:
+            logger.warning(
+                "Could not queue cleanup for deployment %s.",
+                deployment.id,
+                exc_info=True,
+            )
 
     async def cancel(
         self,
@@ -508,73 +866,33 @@ class DeploymentService:
         """Cancel a deployment."""
         logger.info("Cancel requested for deployment %s", deployment.id)
 
-        if (
-            deployment.status in {"finalize", "fail", "completed"}
-            or deployment.conclusion
-        ):
-            raise Exception("Deployment is already finalizing, failing, or completed")
-
-        await DeploymentService.update_status(
-            db,
-            deployment,
-            status="completed",
-            conclusion="canceled",
-            redis_client=redis_client,
+        lock = self.environment_lock(
+            redis_client, deployment.project_id, deployment.environment_id
         )
-
-        if deployment.job_id:
-            job = Job(job_id=deployment.job_id, redis=queue)
-            job_info = await job.info()
-            if job_info and job_info.success is None:
-                await job.abort()
-
-        # Stop container if running to halt logs/app
-        if deployment.container_id and deployment.container_status not in (
-            "removed",
-            "stopped",
-        ):
-            settings = get_settings()
-            try:
-                async with aiodocker.Docker(url=settings.docker_host) as docker_client:
-                    try:
-                        container = await docker_client.containers.get(
-                            deployment.container_id
-                        )
-                        try:
-                            await container.stop()
-                        except Exception:
-                            pass
-                        await queue.enqueue_job(
-                            "delete_container",
-                            deployment.id,
-                            _defer_by=settings.container_delete_grace_seconds,
-                        )
-                        await DeploymentService.update_status(
-                            db,
-                            deployment,
-                            container_status="stopped",
-                            emit=False,
-                        )
-                    except aiodocker.DockerError as e:
-                        if e.status == 404:
-                            await DeploymentService.update_status(
-                                db,
-                                deployment,
-                                container_status="removed",
-                                emit=False,
-                            )
-                        else:
-                            logger.error(
-                                "Error stopping container for deployment %s: %s",
-                                deployment.id,
-                                e,
-                            )
-            except Exception as e:
-                logger.error(
-                    "Error during container cleanup for deployment %s: %s",
-                    deployment.id,
-                    e,
+        async with lock:
+            await db.refresh(
+                deployment,
+                attribute_names=["status", "conclusion", "container_status"],
+            )
+            if (
+                deployment.status in {"finalize", "fail", "completed"}
+                or deployment.conclusion
+            ):
+                raise Exception(
+                    "Deployment is already finalizing, failing, or completed"
                 )
+
+            await DeploymentService.update_status(
+                db,
+                deployment,
+                status="completed",
+                conclusion="canceled",
+                redis_client=redis_client,
+            )
+
+        await self._queue_cleanup(deployment, queue)
+        await self._abort_job(deployment, queue)
+        await self._stop_container(deployment, db)
 
         return deployment
 
@@ -593,20 +911,22 @@ class DeploymentService:
             else f"{project.slug}-env-{environment['slug']}"
         )
 
-        alias = (
-            await db.execute(select(Alias).where(Alias.subdomain == subdomain))
-        ).scalar_one_or_none()
+        lock = self.environment_lock(redis_client, project.id, environment["id"])
+        async with lock:
+            alias = (
+                await db.execute(select(Alias).where(Alias.subdomain == subdomain))
+            ).scalar_one_or_none()
 
-        if not alias or not alias.previous_deployment_id:
-            raise ValueError("No previous deployment to roll back to.")
+            if not alias or not alias.previous_deployment_id:
+                raise ValueError("No previous deployment to roll back to.")
 
-        alias.deployment_id, alias.previous_deployment_id = (
-            alias.previous_deployment_id,
-            alias.deployment_id,
-        )
-        await db.commit()
+            alias.deployment_id, alias.previous_deployment_id = (
+                alias.previous_deployment_id,
+                alias.deployment_id,
+            )
+            await db.commit()
 
-        await self.update_traefik_config(project, db, settings)
+            await self.update_traefik_config(project, db, settings)
 
         await redis_client.xadd(
             f"stream:project:{project.id}:updates",

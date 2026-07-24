@@ -6,7 +6,7 @@
 
 ## Next
 
-- [ ] **Cancel and skip**: Allow users to cancel ongoing deployments, skip deployments on rapid commits.
+- [x] **Cancel and skip**: Allow users to cancel ongoing deployments, skip deployments on rapid commits.
 - [ ] **Dependency caching**: Add caching for dependencies (i.e. volumes for .venv, node_modules, etc) per project.
 - [ ] **Better error logging**: improve error logging for deployments (e.g., when errors aren't captured by Loki, like a worker-jobs crash).
 - [ ] **Remote nodes**: Ability to add multiple remote nodes to deploy apps.

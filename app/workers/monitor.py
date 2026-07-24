@@ -69,7 +69,7 @@ async def _check_status(
     db,
 ):
     """Checks the status of a single deployment's container."""
-    if deployment.status == "completed":
+    if deployment.status == "completed" or deployment.conclusion:
         return
 
     if (
@@ -183,6 +183,22 @@ async def _check_status(
             deployment_probe_state[deployment.id]["probe_active"] = False
 
 
+async def _check_status_by_id(
+    deployment_id: str,
+    docker_client: aiodocker.Docker,
+    redis_pool: ArqRedis,
+):
+    async with AsyncSessionLocal() as deployment_db:
+        deployment = await deployment_db.get(Deployment, deployment_id)
+        if deployment:
+            await _check_status(
+                deployment,
+                docker_client,
+                redis_pool,
+                deployment_db,
+            )
+
+
 # Cleanup function
 async def _cleanup_deployment(deployment_id: str):
     """Cleans up a deployment from the status dictionary."""
@@ -217,17 +233,22 @@ async def monitor():
                             continue
 
                     result = await db.execute(
-                        select(Deployment).where(
+                        select(Deployment.id).where(
                             Deployment.status == "deploy",
+                            Deployment.conclusion.is_(None),
                             Deployment.container_status == "running",
                         )
                     )
-                    deployments_to_check = result.scalars().all()
+                    deployment_ids = result.scalars().all()
 
-                    if deployments_to_check:
+                    if deployment_ids:
                         tasks = [
-                            _check_status(deployment, docker_client, redis_pool, db)
-                            for deployment in deployments_to_check
+                            _check_status_by_id(
+                                deployment_id,
+                                docker_client,
+                                redis_pool,
+                            )
+                            for deployment_id in deployment_ids
                         ]
                         await asyncio.gather(*tasks)
 

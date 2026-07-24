@@ -192,8 +192,19 @@
 </div>
 
 {% if deployment.error %}
-  <div class="alert-destructive" data-error-phase="{{ deployment.error.status }}">
+  <div
+    class="{% if deployment.conclusion == 'skipped' %}alert{% else %}alert-destructive{% endif %}"
+    data-error-phase="{{ deployment.error.status }}"
+  >
     {% include "icons/info.svg" %}
-    <section>{{ deployment.error.message }}</section>
+    <section>
+      {{ deployment.error.message }}
+      {% if deployment.conclusion == 'skipped' and deployment.error.deployment_id %}
+        <a
+          class="underline underline-offset-2"
+          href="{{ url_for('project_deployment', team_slug=team.slug, project_name=project.name, deployment_id=deployment.error.deployment_id) }}"
+        >{{ _('View the replacement deployment') }}</a>
+      {% endif %}
+    </section>
   </div>
 {% endif %}
