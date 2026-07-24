@@ -27,15 +27,18 @@ and a bounded concurrent batch of relevant manifests. Detection then:
 - derives runner, root directory, install/build/start commands, static output,
   confidence, evidence, and warnings;
 - offers every deployable application found in a monorepo; and
-- reports root or shallow nested Dockerfiles without silently using them.
+- associates root and nested Dockerfiles with build contexts and recommends the
+  native Dockerfile strategy while keeping zero-config alternatives editable.
 
 The app-versioned catalog includes Node server and static frameworks, Python
 frameworks, PHP, Go, Bun, and a plain static-site fallback. Definitions are data
 driven; detector implementation handles package-manager commands and framework
 refinements such as SvelteKit/Astro adapters and Angular output directories.
 
-Dockerfiles are currently detection evidence only. Deployment still uses the
-selected zero-config runner and editable commands.
+Dockerfile deployments use rootless BuildKit and the image's `CMD` or
+`ENTRYPOINT`. The configured Dockerfile path is relative to the selected root
+directory/build context. The image must declare a non-root `USER` and listen on
+`0.0.0.0:8000`.
 
 Notes:
 

@@ -25,6 +25,14 @@ class DeploymentService:
         pass
 
     @staticmethod
+    def uses_dockerfile(config: dict | None) -> bool:
+        return (config or {}).get("build_strategy") == "dockerfile"
+
+    @classmethod
+    def requires_runner(cls, config: dict | None) -> bool:
+        return not cls.uses_dockerfile(config)
+
+    @staticmethod
     async def update_status(
         db: AsyncSession,
         deployment: Deployment,
@@ -408,27 +416,29 @@ class DeploymentService:
             raise ValueError("No environment found for this branch.")
 
         config = project.config or {}
-        runner_slug = config.get("runner") or config.get("image")
-        if not runner_slug:
-            raise ValueError("Runner not set in project config.")
-        registry_state = RegistryService(
-            Path(get_settings().data_dir) / "registry"
-        ).state
-        runner_entry = next(
-            (
-                runner
-                for runner in registry_state.runners
-                if runner.get("slug") == runner_slug
-            ),
-            None,
-        )
-        if not runner_entry:
-            raise ValueError(f"Runner '{runner_slug}' not found in registry.")
-        if runner_entry.get("enabled") is not True:
-            raise ValueError(f"Runner '{runner_slug}' is disabled.")
-        runner_image = runner_entry.get("image")
-        if not runner_image:
-            raise ValueError(f"Runner '{runner_slug}' has no image configured.")
+        runner_image = None
+        if self.requires_runner(config):
+            runner_slug = config.get("runner") or config.get("image")
+            if not runner_slug:
+                raise ValueError("Runner not set in project config.")
+            registry_state = RegistryService(
+                Path(get_settings().data_dir) / "registry"
+            ).state
+            runner_entry = next(
+                (
+                    runner
+                    for runner in registry_state.runners
+                    if runner.get("slug") == runner_slug
+                ),
+                None,
+            )
+            if not runner_entry:
+                raise ValueError(f"Runner '{runner_slug}' not found in registry.")
+            if runner_entry.get("enabled") is not True:
+                raise ValueError(f"Runner '{runner_slug}' is disabled.")
+            runner_image = runner_entry.get("image")
+            if not runner_image:
+                raise ValueError(f"Runner '{runner_slug}' has no image configured.")
 
         commit_user_author = commit.get("author") or {}
         commit_user_committer = commit.get("committer") or {}

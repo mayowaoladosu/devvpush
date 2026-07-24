@@ -47,3 +47,7 @@ volumes:
     name: "${DEVPUSH_VOLUME_PREFIX:-devpush}_loki-data"
   alloy-data:
     name: "${DEVPUSH_VOLUME_PREFIX:-devpush}_alloy-data"
+  buildkit-state:
+    name: "${DEVPUSH_VOLUME_PREFIX:-devpush}_buildkit-state"
+  buildkit-socket:
+    name: "${DEVPUSH_VOLUME_PREFIX:-devpush}_buildkit-socket"

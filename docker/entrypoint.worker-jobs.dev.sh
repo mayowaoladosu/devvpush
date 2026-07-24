@@ -1,4 +1,4 @@
 #!/bin/sh
 set -e
 
-exec uv run arq --watch /app workers.jobs.WorkerSettings
+exec uv run arq workers.jobs.WorkerSettings

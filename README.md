@@ -12,6 +12,7 @@ An open-source and self-hostable alternative to Vercel, Render, Netlify and the 
 
 - **Git-based deployments**: Push to deploy from GitHub with zero-downtime rollouts and instant rollback.
 - **Multi-language support**: Python, Node.js, PHP... basically anything that can run on Docker.
+- **Native Dockerfiles**: Build repository Dockerfiles with cached, rootless BuildKit and run the resulting image command.
 - **Environment management**: Multiple environments with branch mapping and encrypted environment variables.
 - **Real-time monitoring**: Live and searchable build and runtime logs.
 - **Team collaboration**: Role-based access control with team invitations and permissions.
@@ -74,6 +75,9 @@ Start the stack:
 ```
 
 The stack auto-detects development mode on macOS and enables hot reloading. Data is stored in `./data/`.
+The web app and monitor reload during development. The jobs worker deliberately
+does not hot-reload because restarting it can interrupt builds; after changing
+job code, run `./scripts/restart.sh --components worker-jobs --no-migrate`.
 
 ## Registry catalog
 
@@ -83,12 +87,24 @@ See `registry/README.md` for the catalog format and override rules.
 Project import automatically detects framework applications and monorepo roots
 from GitHub. It understands 40+ presets, package managers and lockfiles, static
 outputs, framework adapters, and Dockerfile evidence, then fills editable build
-and start settings before deployment.
+and start settings before deployment. A detected Dockerfile becomes an editable
+native-build recommendation; zero-config runners remain available as an explicit
+alternative.
+
+Dockerfile source is downloaded at an immutable commit, extracted with traversal
+and size checks, and sent to a dedicated rootless BuildKit daemon. BuildKit has no
+Docker socket or control-plane network membership. Public dependency traffic is
+forced through a capability-dropped proxy that denies loopback, link-local,
+cloud-metadata, carrier-grade NAT, and private destinations. Project environment
+variables are runtime-only for Dockerfile projects and are never sent as build
+arguments or build secrets. The resulting per-deployment image must define `CMD`
+or `ENTRYPOINT`, declare a non-root `USER`, and listen on `0.0.0.0:8000`.
 
 **Key scripts**:
 
 - `./scripts/start.sh` / `stop.sh` / `restart.sh` — manage the full stack or selected components (`--components <csv>`)
 - `./scripts/compose.sh logs -f app` — view logs
+- `./scripts/buildkit-isolation-e2e.sh` — verify BuildKit and Docker API isolation
 - `./scripts/db-generate.sh` — create database migration
 - `./scripts/clean.sh` — remove all Docker resources and data
 - `./scripts/update.sh` — update by ref (defaults to `app` only; use `--all` / `--components` / `--full` to expand scope)
@@ -100,6 +116,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for codebase structure.
 | Script                     | What it does                                                                                                                                                                      |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `scripts/backup.sh`        | Create backup of data directory, database, and code metadata (`--output <file>`, `--verbose`)                                                                                     |
+| `scripts/buildkit-isolation-e2e.sh` | Verify the rootless BuildKit socket, network, Docker proxy policy, and build-step control-plane isolation                                                           |
 | `scripts/clean.sh`         | Stop stack and remove all Docker resources and data (`--keep-docker`, `--keep-data`, `--yes`)                                                                                     |
 | `scripts/compose.sh`       | Docker compose wrapper with correct files/env (`--`)                                                                                                                              |
 | `scripts/db-generate.sh`   | Generate Alembic migration (prompts for message)                                                                                                                                  |
@@ -148,15 +165,30 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for codebase structure.
 | `POSTGRES_USER`                     | Database user. Default: `devpush-app`.                                                                                                   |
 | `REDIS_URL`                         | Redis URL. Default: `redis://redis:6379`.                                                                                                |
 | `DOCKER_HOST`                       | Docker API. Default: `tcp://docker-proxy:2375`.                                                                                          |
+| `BUILDKIT_HOST`                     | Rootless BuildKit socket. Default: `unix:///run/buildkit/buildkitd.sock`.                                                               |
+| `BUILDKIT_INTERNAL_SUBNET`          | Private internal build network. Default: `10.250.0.0/24`.                                                                                |
+| `BUILDKIT_PROXY_IP`                 | Filtered-egress proxy address inside that subnet. Default: `10.250.0.2`.                                                                 |
+| `BUILDKIT_MEMORY_LIMIT`             | Compose memory limit for the BuildKit daemon. Default: `4g`.                                                                            |
+| `BUILDKIT_CPUS`                     | Compose CPU limit for the BuildKit daemon. Default: `4.0`.                                                                               |
+| `BUILDKIT_PIDS_LIMIT`               | Compose PID limit for the BuildKit daemon. Default: `2048`.                                                                              |
+| `BUILDKIT_CACHE_GC_STORAGE`         | Cache GC reserved, free-space target, and maximum storage in MB. Default: `2048,10240,20480`.                                            |
 | `DATA_DIR`                          | Data directory. Default: `/var/lib/devpush`.                                                                                             |
 | `APP_DIR`                           | Code directory. Default: `/opt/devpush`.                                                                                                 |
 | `DEFAULT_CPUS`                      | Default CPU limit per deployment. No limit if not provided.                                                                              |
 | `MAX_CPUS`                          | Maximum allowed CPU override per project. Used only when `DEFAULT_CPUS` is set. Required to let user customize CPU.                      |
 | `DEFAULT_MEMORY_MB`                 | Default memory limit (MB) per deployment. No limit if not provided.                                                                      |
 | `MAX_MEMORY_MB`                     | Maximum allowed memory override per project. Used only when `DEFAULT_MEMORY_MB` is set. Required to let user customize memory.           |
+| `RUNTIME_PIDS_LIMIT`                | Maximum processes per deployment container. Default: `512`.                                                                              |
 | `JOB_TIMEOUT_SECONDS`               | Job timeout (seconds). Default: `320`.                                                                                                   |
 | `JOB_MAX_TRIES`                     | Max retries per background job. Default: `3`.                                                                                            |
 | `DEPLOYMENT_TIMEOUT_SECONDS`        | Deployment timeout (seconds). Default: `300`.                                                                                            |
+| `DOCKERFILE_BUILD_TIMEOUT_SECONDS`  | Maximum Dockerfile build duration. Default: `900`.                                                                                       |
+| `DOCKERFILE_IMAGE_LOAD_TIMEOUT_SECONDS` | Maximum idle time for loading a built image into Docker. Default: `300`.                                                            |
+| `DOCKERFILE_BUILD_MAX_CONCURRENCY`  | Maximum concurrent Dockerfile builds per jobs worker. Default: `2`.                                                                     |
+| `DOCKERFILE_MAX_ARCHIVE_BYTES`      | Maximum compressed GitHub source archive size. Default: `268435456`.                                                                    |
+| `DOCKERFILE_MAX_CONTEXT_BYTES`      | Maximum extracted Docker build context size. Default: `1073741824`.                                                                     |
+| `DOCKERFILE_MAX_CONTEXT_FILES`      | Maximum files in a Docker build context. Default: `100000`.                                                                              |
+| `DOCKERFILE_MAX_IMAGE_BYTES`        | Hard maximum exported image archive size. Default: `2147483648`.                                                                         |
 | `CONTAINER_DELETE_GRACE_SECONDS`    | Wait before deleting containers after stop/failure to let logs ship. Default: `3`.                                                       |
 | `LOG_STREAM_GRACE_SECONDS`          | Grace window for deployment log streaming (when to connect/close SSE around terminal states). Default: `5`.                              |
 | `LOG_LEVEL`                         | Logging level. Default: `WARNING`.                                                                                                       |

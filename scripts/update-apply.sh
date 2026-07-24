@@ -418,7 +418,7 @@ if ((skip_components==0)); then
       worker-monitor)
         rollout_service worker-monitor recreate
         ;;
-      traefik|loki|redis|docker-proxy|pgsql|alloy)
+      traefik|loki|redis|docker-proxy|pgsql|alloy|buildkitd|buildkit-egress)
         rollout_service "$s" recreate
         ;;
       *) err "unknown component: $s"; exit 1 ;;

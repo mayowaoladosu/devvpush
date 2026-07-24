@@ -46,8 +46,12 @@ services:
     restart: always
     stop_grace_period: ${JOB_TIMEOUT_SECONDS:-320}s
     depends_on:
-      - redis
-      - pgsql
+      redis:
+        condition: service_started
+      pgsql:
+        condition: service_started
+      buildkitd:
+        condition: service_healthy
     networks:
       - default
       - internal
@@ -58,8 +62,12 @@ services:
       HOST_DATA_DIR: ${DATA_DIR:-../data}
       SERVICE_UID: ${SERVICE_UID}
       SERVICE_GID: ${SERVICE_GID}
+      BUILDKIT_PROXY_URL: "http://${BUILDKIT_PROXY_IP:-10.250.0.2}:3128"
+    group_add:
+      - "1000"
     volumes:
       - ${DATA_DIR:-../data}:/data
+      - buildkit-socket:/run/buildkit:ro
     healthcheck:
       test:
         ["CMD", "uv", "run", "arq", "--check", "workers.jobs.WorkerSettings"]
@@ -104,17 +112,108 @@ services:
     restart: always
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - ${APP_DIR:-..}/docker/docker-proxy.cfg:/usr/local/etc/haproxy/haproxy.cfg.template:ro
     environment:
-      - CONTAINERS=1
-      - IMAGES=1
-      - INFO=1
-      - SYSTEM=1
-      - POST=1
-      - EXEC=1
-      - NETWORKS=1
       - DISABLE_IPV6=1
     networks:
       - internal
+
+  buildkit-volume-init:
+    image: moby/buildkit:v0.26.2-rootless@sha256:0ffa2fcf6b8757c47d569b3ef0f03f9d5eb3b9ff5ce68d858f994f89b749da0c
+    user: "0:0"
+    network_mode: none
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        install -d -o 1000 -g 1000 -m 0700 /state
+        install -d -o 1000 -g 1000 -m 0750 /socket
+        chown 1000:1000 /state /socket
+        if [ -S /socket/buildkitd.sock ] && \
+           ! buildctl --addr unix:///socket/buildkitd.sock debug workers >/dev/null 2>&1; then
+          rm -f /socket/buildkitd.sock
+        fi
+    read_only: true
+    restart: "no"
+    volumes:
+      - buildkit-state:/state
+      - buildkit-socket:/socket
+
+  buildkitd:
+    image: moby/buildkit:v0.26.2-rootless@sha256:0ffa2fcf6b8757c47d569b3ef0f03f9d5eb3b9ff5ce68d858f994f89b749da0c
+    restart: unless-stopped
+    depends_on:
+      buildkit-volume-init:
+        condition: service_completed_successfully
+      buildkit-egress:
+        condition: service_healthy
+    command:
+      - --addr
+      - unix:///run/user/1000/buildkit/buildkitd.sock
+      - --oci-worker-snapshotter=native
+      - --oci-worker-gc
+      - --oci-worker-gc-keepstorage
+      - ${BUILDKIT_CACHE_GC_STORAGE:-2048,10240,20480}
+    networks:
+      - buildkit
+    environment:
+      HTTP_PROXY: http://buildkit-egress:3128
+      HTTPS_PROXY: http://buildkit-egress:3128
+      http_proxy: http://buildkit-egress:3128
+      https_proxy: http://buildkit-egress:3128
+      NO_PROXY: localhost,127.0.0.1,::1
+      no_proxy: localhost,127.0.0.1,::1
+    read_only: true
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      - systempaths=unconfined
+    mem_limit: ${BUILDKIT_MEMORY_LIMIT:-4g}
+    cpus: ${BUILDKIT_CPUS:-4.0}
+    pids_limit: ${BUILDKIT_PIDS_LIMIT:-2048}
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=268435456,uid=1000,gid=1000
+      - /home/user/.local/tmp:rw,nosuid,nodev,noexec,size=67108864,uid=1000,gid=1000
+      - /run/user/1000:rw,nosuid,nodev,noexec,size=16777216,uid=1000,gid=1000
+    volumes:
+      - buildkit-state:/home/user/.local/share/buildkit
+      - buildkit-socket:/run/user/1000/buildkit
+    healthcheck:
+      test: ["CMD", "/usr/bin/buildctl", "--addr", "unix:///run/user/1000/buildkit/buildkitd.sock", "debug", "workers"]
+      interval: 30s
+      start_interval: 2s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  buildkit-egress:
+    image: ubuntu/squid@sha256:6a097f68bae708cedbabd6188d68c7e2e7a38cedd05a176e1cc0ba29e3bbe029
+    user: "13:13"
+    entrypoint: ["/usr/sbin/squid"]
+    command: ["-f", "/etc/squid/squid.conf", "-NYC"]
+    restart: unless-stopped
+    networks:
+      buildkit:
+        ipv4_address: ${BUILDKIT_PROXY_IP:-10.250.0.2}
+      buildkit-egress: {}
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 128
+    tmpfs:
+      - /run:rw,nosuid,nodev,noexec,size=16777216,uid=13,gid=13
+      - /tmp:rw,nosuid,nodev,noexec,size=16777216,uid=13,gid=13
+    volumes:
+      - ${APP_DIR:-..}/docker/squid-buildkit.conf:/etc/squid/squid.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /run/squid.pid && kill -0 $$(cat /run/squid.pid)"]
+      interval: 30s
+      start_interval: 2s
+      timeout: 2s
+      retries: 3
+      start_period: 30s
 
   traefik:
     image: traefik:v3.6.2
@@ -204,6 +303,8 @@ volumes:
   devpush-db:
   loki-data:
   alloy-data:
+  buildkit-state:
+  buildkit-socket:
 
 networks:
   default:
@@ -213,3 +314,11 @@ networks:
     internal: true
   runner:
     name: devpush_runner
+  buildkit:
+    name: "${DEVPUSH_VOLUME_PREFIX:-devpush}_buildkit"
+    internal: true
+    ipam:
+      config:
+        - subnet: ${BUILDKIT_INTERNAL_SUBNET:-10.250.0.0/24}
+  buildkit-egress:
+    name: "${DEVPUSH_VOLUME_PREFIX:-devpush}_buildkit-egress"

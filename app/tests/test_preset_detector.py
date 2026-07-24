@@ -634,7 +634,7 @@ class PresetDetectorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("npm install --global serve@14.2.4", result["build_command"])
         self.assertEqual("serve --single . --listen 8000", result["start_command"])
 
-    async def test_root_dockerfile_is_reported_but_zero_config_remains_usable(self):
+    async def test_root_dockerfile_becomes_the_recommended_build_strategy(self):
         result, _ = await self.detect(
             {
                 "Dockerfile": "FROM node:24",
@@ -650,10 +650,11 @@ class PresetDetectorTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual("Dockerfile", result["dockerfile_path"])
-        self.assertEqual("zero-config", result["build_strategy"])
-        self.assertTrue(any("Dockerfile" in warning for warning in result["warnings"]))
+        self.assertEqual("dockerfile", result["build_strategy"])
+        self.assertEqual("express", result["preset"])
+        self.assertTrue(any("8000" in warning for warning in result["warnings"]))
 
-    async def test_shallowest_nested_dockerfile_is_selected(self):
+    async def test_nested_dockerfile_is_relative_to_its_application_root(self):
         result, _ = await self.detect(
             {
                 "apps/web/Dockerfile": "FROM node:24",
@@ -664,7 +665,60 @@ class PresetDetectorTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
-        self.assertEqual("apps/web/Dockerfile", result["dockerfile_path"])
+        self.assertEqual("apps/web", result["root_directory"])
+        self.assertEqual("Dockerfile", result["dockerfile_path"])
+        self.assertEqual("dockerfile", result["build_strategy"])
+
+    async def test_dockerfile_only_repository_is_deployable(self):
+        result, _ = await self.detect(
+            {
+                "services/api/Containerfile": "FROM python:3.13-alpine",
+                "services/api/server.py": "print('ready')",
+            }
+        )
+
+        self.assertIsNone(result["preset"])
+        self.assertEqual("Dockerfile", result["framework_name"])
+        self.assertEqual("services/api", result["root_directory"])
+        self.assertEqual("Containerfile", result["dockerfile_path"])
+        self.assertEqual("dockerfile", result["build_strategy"])
+        self.assertEqual("high", result["confidence"])
+
+    async def test_nested_dockerfile_uses_nearest_application_context(self):
+        result, _ = await self.detect(
+            {
+                "apps/web/deploy/Dockerfile": "FROM node:24",
+                "apps/web/package.json": json.dumps(
+                    {
+                        "scripts": {"start": "node index.js"},
+                        "dependencies": {"express": "5"},
+                    }
+                ),
+                "apps/web/index.js": "",
+            }
+        )
+
+        self.assertEqual("apps/web", result["root_directory"])
+        self.assertEqual("deploy/Dockerfile", result["dockerfile_path"])
+        self.assertEqual("dockerfile", result["build_strategy"])
+
+    async def test_development_dockerfile_variant_is_not_auto_selected(self):
+        result, _ = await self.detect(
+            {
+                "Dockerfile.dev": "FROM node:24",
+                "package.json": json.dumps(
+                    {
+                        "scripts": {"start": "node index.js"},
+                        "dependencies": {"express": "5"},
+                    }
+                ),
+                "index.js": "",
+            }
+        )
+
+        self.assertEqual("express", result["preset"])
+        self.assertEqual("zero-config", result["build_strategy"])
+        self.assertIsNone(result["dockerfile_path"])
 
     async def test_malformed_package_json_falls_back_without_raising(self):
         result, _ = await self.detect({"package.json": "{not-json", "index.js": ""})

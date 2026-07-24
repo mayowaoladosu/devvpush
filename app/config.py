@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     postgres_password: str = ""
     redis_url: str = "redis://redis:6379"
     docker_host: str = "tcp://docker-proxy:2375"
+    buildkit_host: str = "unix:///run/buildkit/buildkitd.sock"
+    buildkit_proxy_url: str = "http://10.250.0.2:3128"
     data_dir: str = "/data"
     host_data_dir: str | None = None
     app_dir: str = "/app"
@@ -57,6 +59,14 @@ class Settings(BaseSettings):
     job_timeout_seconds: int = 320
     job_completion_wait_seconds: int = 300
     deployment_timeout_seconds: int = 300
+    dockerfile_build_timeout_seconds: int = 900
+    dockerfile_image_load_timeout_seconds: int = 300
+    dockerfile_build_max_concurrency: int = 2
+    dockerfile_max_archive_bytes: int = 256 * 1024 * 1024
+    dockerfile_max_context_bytes: int = 1024 * 1024 * 1024
+    dockerfile_max_context_files: int = 100_000
+    dockerfile_max_image_bytes: int = 2 * 1024 * 1024 * 1024
+    runtime_pids_limit: int = 512
     container_delete_grace_seconds: int = 15
     log_stream_grace_seconds: int = 5
     service_uid: int = 1000
@@ -155,5 +165,28 @@ def get_settings():
         settings.version_file = os.path.join(settings.data_dir, "version.json")
     if not settings.host_data_dir:
         settings.host_data_dir = settings.data_dir
+
+    settings.dockerfile_build_timeout_seconds = max(
+        1, settings.dockerfile_build_timeout_seconds
+    )
+    settings.dockerfile_image_load_timeout_seconds = max(
+        1, settings.dockerfile_image_load_timeout_seconds
+    )
+    settings.dockerfile_build_max_concurrency = max(
+        1, settings.dockerfile_build_max_concurrency
+    )
+    settings.dockerfile_max_archive_bytes = max(
+        1, settings.dockerfile_max_archive_bytes
+    )
+    settings.dockerfile_max_context_bytes = max(
+        1, settings.dockerfile_max_context_bytes
+    )
+    settings.dockerfile_max_context_files = max(
+        1, settings.dockerfile_max_context_files
+    )
+    settings.dockerfile_max_image_bytes = max(
+        1, settings.dockerfile_max_image_bytes
+    )
+    settings.runtime_pids_limit = max(1, settings.runtime_pids_limit)
 
     return settings

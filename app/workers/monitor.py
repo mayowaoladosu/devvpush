@@ -1,12 +1,14 @@
 import asyncio
 import logging
-import aiodocker
-from sqlalchemy import select, exc, inspect
-from arq.connections import ArqRedis, RedisSettings, create_pool
-import httpx
+import re
 from datetime import datetime, timezone
-from config import get_settings
 
+import aiodocker
+import httpx
+from arq.connections import ArqRedis, RedisSettings, create_pool
+from sqlalchemy import exc, inspect, select
+
+from config import get_settings
 from db import AsyncSessionLocal
 from models import Deployment
 from services.deployment import DeploymentService
@@ -14,6 +16,40 @@ from services.deployment import DeploymentService
 logger = logging.getLogger(__name__)
 
 deployment_probe_state = {}  # deployment_id -> {"container": container_obj, "probe_active": bool}
+
+
+def _parse_container_started_at(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    normalized = re.sub(
+        r"(\.\d{6})\d+(?=Z$|[+-]\d{2}:\d{2}$)",
+        r"\1",
+        str(value),
+    ).replace("Z", "+00:00")
+    try:
+        started_at = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    return started_at.astimezone(timezone.utc)
+
+
+def _readiness_timed_out(
+    container_info: dict,
+    *,
+    now: datetime,
+    fallback_started_at: datetime,
+    timeout_seconds: int,
+) -> bool:
+    started_at = _parse_container_started_at(
+        container_info.get("State", {}).get("StartedAt")
+    )
+    if started_at is None:
+        started_at = fallback_started_at
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    return (now - started_at).total_seconds() > timeout_seconds
 
 
 async def _http_probe(ip: str, port: int, timeout: float = 5) -> bool:
@@ -44,28 +80,6 @@ async def _check_status(
 
     log_prefix = f"[DeployMonitor:{deployment.id}]"
 
-    # Timeout check
-    try:
-        settings = get_settings()
-        now_utc = datetime.now(timezone.utc)
-        created_at = (
-            deployment.created_at.replace(tzinfo=timezone.utc)
-            if deployment.created_at.tzinfo is None
-            else deployment.created_at
-        )
-        if (now_utc - created_at).total_seconds() > settings.deployment_timeout_seconds:
-            await redis_pool.enqueue_job(
-                "fail_deployment",
-                deployment.id,
-                "deploy",
-                "Timed out waiting for app to respond on port 8000. Ensure your app starts an HTTP server on this port.",
-            )
-            logger.warning(f"{log_prefix} Deployment timed out; failure job enqueued.")
-            await _cleanup_deployment(deployment.id)
-            return
-    except Exception:
-        logger.error(f"{log_prefix} Error while evaluating timeout.", exc_info=True)
-
     if deployment.id not in deployment_probe_state:
         try:
             container = await docker_client.containers.get(deployment.container_id)
@@ -90,6 +104,29 @@ async def _check_status(
         logger.info(f"{log_prefix} Probing container {deployment.container_id}")
         container_info = await container.show()
         status = container_info["State"]["Status"]
+
+        created_at = (
+            deployment.created_at.replace(tzinfo=timezone.utc)
+            if deployment.created_at.tzinfo is None
+            else deployment.created_at
+        )
+        if status == "running" and _readiness_timed_out(
+            container_info,
+            now=datetime.now(timezone.utc),
+            fallback_started_at=created_at,
+            timeout_seconds=get_settings().deployment_timeout_seconds,
+        ):
+            await redis_pool.enqueue_job(
+                "fail_deployment",
+                deployment.id,
+                "deploy",
+                "Timed out waiting for app to respond on port 8000. Ensure your app starts an HTTP server on this port.",
+            )
+            logger.warning(
+                f"{log_prefix} Deployment timed out; failure job enqueued."
+            )
+            await _cleanup_deployment(deployment.id)
+            return
 
         if status == "exited":
             exit_code = container_info["State"].get("ExitCode", -1)

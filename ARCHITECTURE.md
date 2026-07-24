@@ -5,6 +5,7 @@ This document describes the high‑level architecture of /dev/push, how the main
 ## Stack
 
 - Docker & [Docker Compose](https://github.com/docker/compose)
+- Rootless [BuildKit](https://github.com/moby/buildkit)
 - [Traefik](https://github.com/traefik/traefik)
 - [Loki](https://github.com/grafana/loki)
 - [Alloy](https://github.com/grafana/alloy)
@@ -21,8 +22,9 @@ This document describes the high‑level architecture of /dev/push, how the main
 - **App**: The app handles all of the user-facing logic (managing teams/projects, authenticating, searching logs...). It communicates with the workers via Redis.
 - **Workers**: When we create a new deployment, we queue a deploy job using arq (`app/workers/jobs.py`). It will start a container, then delegate monitoring to a separate background worker (`app/workers/monitor.py`), before wrapping things back with yet another job. These workers are also used to run certain batch jobs (e.g. deleting a team, cleaning up inactive deployments and their containers). Deployment lifecycle statuses: `prepare → deploy → finalize → completed` (with `conclusion`: succeeded/failed/canceled/skipped; `fail` is transient for failure handling).
 - **Logs**: build and runtime logs are streamed from Loki and served to the user via an SSE endpoint in the app.
-- **Runners**: User apps run inside runner containers pulled from the registry catalog (e.g. `ghcr.io/devpushhq/runner-python-3.12:1.0.0`). The deploy job (`app/workers/tasks/deployment.py`) creates the container and runs the configured build/start commands.
-- **Framework detection**: Repository import reads one recursive Git tree and a bounded batch of manifests. The detector ranks every candidate application root, derives package-manager-aware commands, and returns a recommendation plus monorepo alternatives and evidence. Registry runner data, app-versioned framework definitions, and instance overrides are merged before detection.
+- **Runners**: Zero-config apps run inside language containers pulled from the registry catalog. Dockerfile apps are built into immutable per-deployment images and run their image-defined command.
+- **BuildKit**: Only the jobs worker can reach the rootless daemon over a group-restricted Unix socket. BuildKit has persistent layer cache, a private internal network, a read-only root filesystem, bounded resources, and no host Docker socket or control-plane network membership. Public dependency traffic crosses a separate filtered-egress proxy.
+- **Framework detection**: Repository import reads one recursive Git tree and a bounded batch of manifests. The detector ranks every candidate application root, derives package-manager-aware commands, and returns a recommendation plus monorepo alternatives and evidence. Explicit Dockerfiles are associated with their application roots and take precedence while remaining editable.
 - **Reverse proxy**: We have Traefik sitting in front of both app and the deployed runner containers. All routing is done using Traefik labels, and we also maintain environment and branch aliases (e.g. `my-project-env-staging.devpush.app`) using Traefik config files.
 
 ## File structure
@@ -69,6 +71,11 @@ flowchart TB
     RC[Runner Containers]
   end
 
+  subgraph Build
+    BK[Rootless BuildKit]
+    EP[Filtered Egress Proxy]
+  end
+
   GH -- webhooks/OAuth --> A
   GH -- trees/manifests --> A
   DNS -- routes --> T
@@ -80,6 +87,9 @@ flowchart TB
   W -- consume/jobs --> R
   M -- read/write --> R
   W -- Docker API --> DP
+  W -- Unix socket/build context --> BK
+  BK -- Docker image archive --> W
+  BK -- public HTTP/S only --> EP
   M -- Docker API --> DP
   DP -- create/manage --> RC
   RC -- logs --> AL
@@ -123,7 +133,16 @@ Notes:
 
 ### Docker Socket Proxy
 
-- `tecnativa/docker-socket-proxy` exposing a limited Docker API used by workers and Traefik.
+- `tecnativa/docker-socket-proxy` exposing an endpoint allowlist used by workers, Traefik, and Alloy.
+- Host `/build`, `/exec`, volume, and system-management endpoints are denied. The worker may load a completed BuildKit image but cannot invoke the host Docker builder.
+
+### Rootless BuildKit
+
+- `buildkitd` runs as UID/GID 1000 with the native snapshotter, sandbox process mode, a read-only root filesystem, CPU/memory/PID limits, and bounded persistent cache state. The build client also enforces the configured image-export maximum with an OS file-size limit.
+- A one-shot permission gate exposes only its Unix socket to the jobs worker. The app and monitor do not receive the socket and no service mounts the host Docker socket except the policy proxy.
+- Build steps have no direct route off their fixed private network. A Squid adapter with a static private address and a separate egress network permits public ports 80/443 and denies loopback, private, link-local, metadata, benchmark, documentation, multicast, and reserved address ranges.
+- Build contexts come from immutable GitHub archives. Archive path, file-count, compressed-size, extracted-size, Dockerfile-size, build-time, and image-size limits are enforced by `DockerfileBuilder`.
+- GitHub installation credentials stay in the jobs worker. Project environment variables are not passed to Dockerfile builds.
 
 ### PostgreSQL
 
@@ -144,8 +163,9 @@ Notes:
   - Manual: user selects commit/env -> create DB record -> enqueue `start_deployment`.
 
 2) `start_deployment`
-  - Create runner container (language image, env vars, resource limits, Traefik labels; Alloy tails container logs).
-  - Inside container: clone repo at commit, run optional build/pre‑deploy commands, then start app.
+  - Zero-config: create a language runner, clone the selected commit, run optional build/pre-deploy commands, then start the app.
+  - Dockerfile: download the immutable GitHub archive, safely extract the selected root, stream the context to rootless BuildKit, export/load a managed image, then start its `CMD`/`ENTRYPOINT` without source credentials.
+  - Apply runtime env vars, resource limits, Traefik labels, and JSON logging to either container type.
   - Mark deployment `in_progress`, set `container_id=…`, emit Redis Stream update.
 
 3) Monitor
@@ -187,6 +207,8 @@ Notes:
 - `devpush_default`: public (Traefik, app, Loki).
 - `devpush_internal`: internal (DB, Redis, Docker proxy, Traefik file provider).
 - `devpush_runner`: runner network for deployed containers; Traefik and workers attach to route/probe.
+- `${DEVPUSH_VOLUME_PREFIX}_buildkit`: internal BuildKit/build-step network with no default egress route. It is not shared with app, database, Redis, Docker proxy, or runners.
+- `${DEVPUSH_VOLUME_PREFIX}_buildkit-egress`: outbound network used only by the filtered proxy.
 
 ## Observability
 
@@ -198,7 +220,10 @@ Notes:
 
 - Sessions: signed cookies with CSRF protection (no Redis session storage).
 - Secrets: Fernet encryption for env vars and tokens.
-- Docker: access via socket proxy with limited capabilities; runner containers run as non‑root with resource limits.
+- Docker: host build/exec/system endpoints are denied by the proxy; repository build steps execute in rootless BuildKit without the host socket. Runtime containers drop all capabilities, cannot gain privileges, and have a PID ceiling. Dockerfile images must declare a non-root user and receive no capabilities; zero-config runner bootstraps receive only the ownership and UID/GID capabilities needed to become the configured non-root user.
+- Source: Dockerfile archives are bounded and extracted with Python's data filter plus explicit path/size checks.
+- Build secrets: GitHub and project secrets are not exposed to Dockerfile instructions or persisted in build context/cache.
+- Egress: builds can fetch public dependencies but cannot connect directly or through the proxy to control-plane/private, host, or cloud-metadata ranges.
 
 ## Scaling
 

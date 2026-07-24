@@ -3,11 +3,12 @@ import os
 import time
 
 import aiodocker
-from sqlalchemy import select, delete
+from sqlalchemy import delete, select
 
 from config import get_settings
 from db import AsyncSessionLocal
 from models import Alias, Deployment, Domain, Project, StorageProject
+from services.dockerfile_builder import remove_managed_deployment_image
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,14 @@ async def delete_project(ctx, project_id: str, batch_size: int = 100):
                                 logger.error(
                                     f"[DeleteProject:{project_id}] Failed to remove container {deployment.container_id}: {e}"
                                 )
+                        try:
+                            await remove_managed_deployment_image(
+                                docker_client, deployment.image
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"[DeleteProject:{project_id}] Failed to remove image {deployment.image}: {e}"
+                            )
 
                     try:
                         # Delete aliases

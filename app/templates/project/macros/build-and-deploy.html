@@ -15,6 +15,7 @@
 <div
   class="space-y-6"
   x-data="{
+    selectedBuildStrategy: '{{ form.build_strategy.data or "zero-config" }}',
     selectedPreset: '{{ form.preset.data or "" }}',
     selectedDetectedApp: 0,
     detectedApps,
@@ -73,10 +74,15 @@
       const app = this.detectedApps[Number(index)];
       if (!app) return;
 
+      this.selectedBuildStrategy = app.build_strategy || 'zero-config';
+      if ($refs.buildStrategyInput) {
+        $refs.buildStrategyInput.value = this.selectedBuildStrategy;
+        $refs.buildStrategyInput.dispatchEvent(new Event('change', { bubbles: true }));
+      }
       const presetInput = this.$root.querySelector('input[name=preset]');
       const presetOption = presetInput
         ?.closest('.select')
-        ?.querySelector(`[role=option][data-value='${app.preset}']`);
+        ?.querySelector(`[role=option][data-value='${app.preset || ''}']`);
       if (presetOption) presetOption.click();
       if (presetInput) presetInput.value = app.preset || '';
 
@@ -85,6 +91,7 @@
       const values = [
         [$refs.runnerInput, app.runner],
         [$refs.rootDirectoryInput, app.root_directory],
+        [$refs.dockerfilePathInput, app.dockerfile_path],
         [$refs.buildCommandInput, app.build_command],
         [$refs.preDeployCommandInput, app.pre_deploy_command],
         [$refs.startCommandInput, app.start_command],
@@ -98,6 +105,7 @@
     },
   }"
   x-init="
+    selectedBuildStrategy = $refs.buildStrategyInput?.value || selectedBuildStrategy;
     setPreset(selectedPreset, false, initValues);
     if ($refs.runnerInput.value !== '{{ form.runner.data or "" }}') {
       $dispatch('change');
@@ -105,12 +113,12 @@
   "
 >
   {% if detection %}
-    {% if detection.preset %}
+    {% if detection.preset or detection.dockerfile_path %}
       <div class="rounded-lg border bg-muted/50 p-4 space-y-3">
         <div class="flex flex-wrap items-center gap-2">
           <span class="font-semibold">
             {{ _('Detected') }}
-            <span x-text="getDetectedApp()?.framework_name">{{ detection.framework_name }}</span>
+            <span x-text="getDetectedApp()?.framework_name || 'Dockerfile'">{{ detection.framework_name or 'Dockerfile' }}</span>
           </span>
           <span class="badge-secondary">
             <span x-text="getDetectedApp()?.confidence">{{ detection.confidence }}</span>
@@ -174,8 +182,27 @@
     {% endif %}
   {% endif %}
 
-  {# FRAMEWORK PRESET #}
+  {# BUILD STRATEGY #}
   <div class="space-y-3">
+    {{ form.build_strategy.label() }}
+    {{ form.build_strategy(**{
+      'x-ref': 'buildStrategyInput',
+      'x-model': 'selectedBuildStrategy',
+      'class': 'w-full'
+    }) }}
+    {% for error in form.build_strategy.errors %}
+      <p class="text-sm text-destructive">{{ error }}</p>
+    {% endfor %}
+    <p class="text-sm text-muted-foreground" x-show="selectedBuildStrategy === 'zero-config'">
+      {{ _('Detect a framework and build it with a maintained language runner.') }}
+    </p>
+    <p class="text-sm text-muted-foreground" x-show="selectedBuildStrategy === 'dockerfile'" x-cloak>
+      {{ _('Build the repository Dockerfile with isolated rootless BuildKit, then run the image command.') }}
+    </p>
+  </div>
+
+  {# FRAMEWORK PRESET #}
+  <div class="space-y-3" x-show="selectedBuildStrategy === 'zero-config'">
     <label for="preset">{{ _('Framework preset') }}</label>
     <div class="flex flex-wrap items-center gap-2">
       {% from "macros/select.html" import select %}
@@ -225,7 +252,7 @@
   </div>
 
   {# RUNNER #}
-  <div class="space-y-3">
+  <div class="space-y-3" x-show="selectedBuildStrategy === 'zero-config'">
     {{ form.runner.label() }}
     {{ form.runner(**{
       'x-ref': 'runnerInput',
@@ -252,12 +279,36 @@
       <p class="text-sm text-destructive">{{ error }}</p>
     {% endfor %}
     <p class="text-sm text-muted-foreground">
-      {{ _('Commands will run from this directory.') }}
+      <span x-show="selectedBuildStrategy === 'zero-config'">
+        {{ _('Commands will run from this directory.') }}
+      </span>
+      <span x-show="selectedBuildStrategy === 'dockerfile'" x-cloak>
+        {{ _('This directory is sent to BuildKit as the Docker build context.') }}
+      </span>
+    </p>
+  </div>
+
+  {# DOCKERFILE PATH #}
+  <div class="space-y-3" x-show="selectedBuildStrategy === 'dockerfile'" x-cloak>
+    {{ form.dockerfile_path.label() }}
+    <div class="relative">
+      {{ form.dockerfile_path(
+        id=False,
+        class="w-full font-mono text-[13px]",
+        placeholder="Dockerfile",
+        **{'x-ref': 'dockerfilePathInput'}
+      ) }}
+    </div>
+    {% for error in form.dockerfile_path.errors %}
+      <p class="text-sm text-destructive">{{ error }}</p>
+    {% endfor %}
+    <p class="text-sm text-muted-foreground">
+      {{ _('Path relative to the build context. The image must declare a non-root <code>USER</code> and listen on <code>0.0.0.0:8000</code>.') | safe }}
     </p>
   </div>
 
   {# BUILD COMMAND #}
-  <div class="space-y-3">
+  <div class="space-y-3" x-show="selectedBuildStrategy === 'zero-config'">
     {{ form.build_command.label() }}
     <div class="relative">
       {{ form.build_command(
@@ -275,7 +326,7 @@
   </div>
 
   {# PRE-DEPLOY COMMAND #}
-  <div class="space-y-3">
+  <div class="space-y-3" x-show="selectedBuildStrategy === 'zero-config'">
     {{ form.pre_deploy_command.label() }}
     <div class="relative">
       {{ form.pre_deploy_command(
@@ -293,7 +344,7 @@
   </div>
 
   {# START COMMAND #}
-  <div class="space-y-3">
+  <div class="space-y-3" x-show="selectedBuildStrategy === 'zero-config'">
     {{ form.start_command.label() }}
     <div class="relative">
       {{ form.start_command(

@@ -1,3 +1,5 @@
+FROM moby/buildkit:v0.26.2-rootless@sha256:0ffa2fcf6b8757c47d569b3ef0f03f9d5eb3b9ff5ce68d858f994f89b749da0c AS buildkit
+
 FROM python:3.13-slim
 
 ARG APP_UID=1000
@@ -12,6 +14,7 @@ RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
 
 # Install uv
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=buildkit /usr/bin/buildctl /usr/local/bin/buildctl
 
 WORKDIR /app
 

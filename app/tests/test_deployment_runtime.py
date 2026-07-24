@@ -62,6 +62,15 @@ class DeploymentRuntimeEnvironmentTests(unittest.TestCase):
         self.assertEqual("127.0.0.1", values["HOST"])
         self.assertEqual("0.0.0.0", values["HOSTNAME"])
 
+    def test_dockerfile_projects_do_not_require_a_runner(self):
+        self.assertFalse(
+            DeploymentService.requires_runner({"build_strategy": "dockerfile"})
+        )
+        self.assertTrue(
+            DeploymentService.requires_runner({"build_strategy": "zero-config"})
+        )
+        self.assertTrue(DeploymentService.requires_runner({}))
+
 
 if __name__ == "__main__":
     unittest.main()

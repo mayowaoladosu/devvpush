@@ -52,6 +52,10 @@ def _runner_choices(runners: list[dict]) -> dict[str, list[tuple[str, str]]]:
 
 
 def validate_runner(self, field):
+    if self.build_strategy.data == "dockerfile":
+        return
+    if not self.runner.data:
+        raise ValidationError(_("A runner is required for zero-config builds."))
     valid_slugs = {
         runner.get("slug")
         for runner in self._runners
@@ -61,6 +65,29 @@ def validate_runner(self, field):
         raise ValidationError(
             _("Invalid runner. Please select a runner from the list.")
         )
+
+
+def validate_dockerfile_path(form, field):
+    if form.build_strategy.data != "dockerfile":
+        return
+    value = str(field.data or "").strip().replace("\\", "/")
+    if not value:
+        raise ValidationError(_("Dockerfile path is required."))
+    if "//" in value or value.endswith("/") or "\x00" in value:
+        raise ValidationError(_("Dockerfile path contains invalid segments."))
+    parts = [part for part in value.split("/") if part not in {"", "."}]
+    if not parts:
+        raise ValidationError(_("Dockerfile path is required."))
+    if ".." in parts or value.startswith("/"):
+        raise ValidationError(
+            _("Dockerfile path must stay inside the root directory.")
+        )
+    field.data = "/".join(parts)
+
+
+def validate_start_command(form, field):
+    if form.build_strategy.data != "dockerfile" and not str(field.data or "").strip():
+        raise ValidationError(_("Start command is required for zero-config builds."))
 
 
 def validate_root_directory(form, field):
@@ -402,13 +429,23 @@ class ProjectDomainVerifyForm(StarletteForm):
 
 
 class ProjectBuildAndDeployForm(StarletteForm):
+    build_strategy = SelectField(
+        _l("Build strategy"),
+        choices=[
+            ("zero-config", _l("Zero-config runner")),
+            ("dockerfile", _l("Dockerfile")),
+        ],
+        default="zero-config",
+        validators=[DataRequired()],
+    )
     preset = SelectField(
         _l("Framework presets"),
         validators=[Optional(), Length(max=255)],
     )
     runner = SelectField(
         _l("Runner"),
-        validators=[DataRequired(), Length(min=1, max=255)],
+        validators=[Optional(), Length(max=255)],
+        validate_choice=False,
     )
     root_directory = StringField(
         _l("Root directory"),
@@ -422,11 +459,22 @@ class ProjectBuildAndDeployForm(StarletteForm):
             ),
         ],
     )
+    dockerfile_path = StringField(
+        _l("Dockerfile path"),
+        validators=[
+            Optional(),
+            Length(max=255),
+            Regexp(
+                r"^[a-zA-Z0-9_\-./]+$",
+                message=_l(
+                    "Dockerfile path can only contain letters, numbers, dots, hyphens, underscores, and forward slashes"
+                ),
+            ),
+        ],
+    )
     build_command = StringField(_l("Build command"))
     pre_deploy_command = StringField(_l("Pre-deploy command"))
-    start_command = StringField(
-        _l("Start command"), validators=[DataRequired(), Length(min=1)]
-    )
+    start_command = StringField(_l("Start command"), validators=[Optional()])
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -443,7 +491,11 @@ class ProjectBuildAndDeployForm(StarletteForm):
 
     validate_runner = validate_runner
 
+    validate_dockerfile_path = validate_dockerfile_path
+
     validate_root_directory = validate_root_directory
+
+    validate_start_command = validate_start_command
 
 
 class ProjectGeneralForm(StarletteForm):
@@ -524,6 +576,15 @@ class ProjectCreateForm(StarletteForm):
     production_branch = StringField(
         _l("Production branch"), validators=[DataRequired(), Length(min=1, max=255)]
     )
+    build_strategy = SelectField(
+        _l("Build strategy"),
+        choices=[
+            ("zero-config", _l("Zero-config runner")),
+            ("dockerfile", _l("Dockerfile")),
+        ],
+        default="zero-config",
+        validators=[DataRequired()],
+    )
     preset = SelectField(
         _l("Framework presets"),
         choices=[],
@@ -532,7 +593,8 @@ class ProjectCreateForm(StarletteForm):
     runner = SelectField(
         _l("Runner"),
         choices=[],
-        validators=[DataRequired(), Length(min=1, max=255)],
+        validators=[Optional(), Length(max=255)],
+        validate_choice=False,
     )
     root_directory = StringField(
         _l("Root directory"),
@@ -546,15 +608,30 @@ class ProjectCreateForm(StarletteForm):
             ),
         ],
     )
+    dockerfile_path = StringField(
+        _l("Dockerfile path"),
+        validators=[
+            Optional(),
+            Length(max=255),
+            Regexp(
+                r"^[a-zA-Z0-9_\-./]+$",
+                message=_l(
+                    "Dockerfile path can only contain letters, numbers, dots, hyphens, underscores, and forward slashes"
+                ),
+            ),
+        ],
+    )
     build_command = StringField(_l("Build command"))
     pre_deploy_command = StringField(_l("Pre-deploy command"))
-    start_command = StringField(
-        _l("Start command"), validators=[DataRequired(), Length(min=1)]
-    )
+    start_command = StringField(_l("Start command"), validators=[Optional()])
     env_vars = FieldList(FormField(ProjectEnvVarForm))
     submit = SubmitField(_l("Save"))
 
     validate_root_directory = validate_root_directory
+
+    validate_dockerfile_path = validate_dockerfile_path
+
+    validate_start_command = validate_start_command
 
     def __init__(self, *args, db: AsyncSession, team: Team, **kwargs):
         super().__init__(*args, **kwargs)

@@ -141,10 +141,10 @@ class PresetDetector:
                 if item.get("type") == "blob"
             }
             raw_paths.discard("")
-            dockerfile_path = self._find_dockerfile(raw_paths)
+            dockerfile_paths = self._find_dockerfiles(raw_paths)
             paths = {path for path in raw_paths if not self._is_ignored(path)}
             if not paths:
-                return self._empty_result(dockerfile_path=dockerfile_path)
+                return self._empty_result()
 
             roots = self._candidate_roots(paths)
             content_paths = self._content_paths(paths)
@@ -162,9 +162,31 @@ class PresetDetector:
                 if recommendation:
                     recommendations.append(recommendation)
 
+            for dockerfile_path in dockerfile_paths:
+                candidates = sorted(
+                    (
+                        item
+                        for item in recommendations
+                        if self._path_is_within(
+                            dockerfile_path,
+                            item.get("root_directory") or "",
+                        )
+                    ),
+                    key=lambda item: len(item.get("root_directory") or ""),
+                    reverse=True,
+                )
+                recommendation = candidates[0] if candidates else None
+                if recommendation:
+                    if recommendation.get("build_strategy") != "dockerfile":
+                        self._apply_dockerfile(recommendation, dockerfile_path)
+                else:
+                    recommendations.append(
+                        self._dockerfile_recommendation(dockerfile_path)
+                    )
+
             recommendations.sort(key=self._recommendation_sort_key)
             if not recommendations:
-                result = self._empty_result(dockerfile_path=dockerfile_path)
+                result = self._empty_result()
                 if tree.get("truncated"):
                     result["warnings"].append(
                         "GitHub truncated the repository tree; detection may be "
@@ -176,14 +198,6 @@ class PresetDetector:
             best["alternatives"] = [
                 self._public_recommendation(item) for item in recommendations[1:]
             ]
-            best["dockerfile_path"] = dockerfile_path
-            best["build_strategy"] = "zero-config"
-            if dockerfile_path:
-                best["warnings"].append(
-                    f"Detected {dockerfile_path}. Dockerfile builds are not enabled "
-                    "yet; "
-                    "the generated zero-config recommendation remains selected."
-                )
             if tree.get("truncated"):
                 best["warnings"].append(
                     "GitHub truncated the repository tree; detection may be incomplete."
@@ -306,6 +320,8 @@ class PresetDetector:
             "confidence": self._confidence(pattern["priority"], evidence),
             "evidence": evidence,
             "warnings": warnings,
+            "dockerfile_path": None,
+            "build_strategy": "zero-config",
             "_priority": pattern["priority"],
         }
 
@@ -770,7 +786,61 @@ class PresetDetector:
     @staticmethod
     def _recommendation_sort_key(item: dict) -> tuple:
         root = item.get("root_directory") or ""
-        return (-item["_priority"], root.count("/"), root, item["preset"])
+        return (
+            -item["_priority"],
+            root.count("/"),
+            root,
+            item.get("preset") or "",
+        )
+
+    @staticmethod
+    def _apply_dockerfile(recommendation: dict, dockerfile_path: str) -> None:
+        root = recommendation.get("root_directory") or ""
+        relative_path = posixpath.relpath(dockerfile_path, root or ".")
+        recommendation.update(
+            {
+                "runner": None,
+                "build_command": "",
+                "pre_deploy_command": "",
+                "start_command": "",
+                "dockerfile_path": relative_path,
+                "build_strategy": "dockerfile",
+                "confidence": "high",
+                "_priority": max(int(recommendation.get("_priority") or 0), 10_000),
+            }
+        )
+        recommendation["evidence"] = list(
+            dict.fromkeys([*(recommendation.get("evidence") or []), dockerfile_path])
+        )
+        recommendation["warnings"].append(
+            "The image must define CMD or ENTRYPOINT, declare a non-root USER, "
+            "and listen on 0.0.0.0:8000 at runtime."
+        )
+
+    @classmethod
+    def _dockerfile_recommendation(cls, dockerfile_path: str) -> dict:
+        root = posixpath.dirname(dockerfile_path)
+        recommendation = {
+            "preset": None,
+            "framework_name": "Dockerfile",
+            "runner": None,
+            "root_directory": root,
+            "build_command": "",
+            "pre_deploy_command": "",
+            "start_command": "",
+            "output": "server",
+            "output_directory": None,
+            "package_manager": None,
+            "lockfile": None,
+            "confidence": "high",
+            "evidence": [],
+            "warnings": [],
+            "dockerfile_path": None,
+            "build_strategy": "zero-config",
+            "_priority": 10_000,
+        }
+        cls._apply_dockerfile(recommendation, dockerfile_path)
+        return recommendation
 
     @staticmethod
     def _public_recommendation(item: dict) -> dict:
@@ -1038,21 +1108,27 @@ class PresetDetector:
         return any(part in _IGNORED_PARTS for part in path.split("/"))
 
     @staticmethod
-    def _find_dockerfile(paths: set[str]) -> str | None:
-        for root_name in ("Dockerfile", "dockerfile", "Containerfile"):
-            if root_name in paths:
-                return root_name
+    def _find_dockerfiles(paths: set[str]) -> list[str]:
         candidates = [
             path
             for path in paths
             if posixpath.basename(path).lower() in {"dockerfile", "containerfile"}
             and not PresetDetector._is_ignored(path)
         ]
-        return min(
-            candidates,
-            key=lambda path: (path.count("/"), path.lower(), path),
-            default=None,
+        candidates.sort(
+            key=lambda path: (
+                path.count("/"),
+                0
+                if posixpath.basename(path) == "Dockerfile"
+                else 1,
+                path.lower(),
+                path,
+            )
         )
+        selected: dict[str, str] = {}
+        for path in candidates:
+            selected.setdefault(posixpath.dirname(path), path)
+        return list(selected.values())
 
     @staticmethod
     def _is_workspace_shell(slug: str, root: str, package: dict | None) -> bool:
@@ -1071,6 +1147,10 @@ class PresetDetector:
     @staticmethod
     def _join(root: str, name: str) -> str:
         return f"{root}/{name}" if root else name
+
+    @staticmethod
+    def _path_is_within(path: str, root: str) -> bool:
+        return not root or path == root or path.startswith(root + "/")
 
     @staticmethod
     def _empty_result(

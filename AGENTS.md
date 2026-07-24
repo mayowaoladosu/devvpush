@@ -158,6 +158,7 @@ These guidelines apply to every script under `scripts/` (install/start/stop/rest
 2. **Monitor worker**: `app/workers/monitor.py` - Monitors deployment containers
 3. **Tasks**: `app/workers/tasks/` - Individual task implementations (deploy, cleanup, etc.)
 4. **Job queue**: Access via `get_queue()` dependency (returns `ArqRedis` connection)
+5. **Development reloads**: Do not add ARQ `--watch` to the jobs worker. Builds are long-running and must not be interrupted by source-file changes; restart `worker-jobs` explicitly after job-code edits.
 
 ### Code Style
 
@@ -206,6 +207,11 @@ These guidelines apply to every script under `scripts/` (install/start/stop/rest
 6. **traefik**: Reverse proxy and TLS termination
 7. **loki**: Log aggregation
 8. **alloy**: Telemetry agent (ships logs to Loki)
+9. **buildkitd**: Rootless Dockerfile builder reached only by `worker-jobs` over a Unix socket
+
+Dockerfile builds must stay behind `services/dockerfile_builder.py`. Never call
+the host Docker `/build` endpoint, pass GitHub/project secrets as build args, or
+mount the host Docker socket into BuildKit or an application service.
 
 ---
 

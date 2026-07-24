@@ -19,7 +19,7 @@
     {{ env_vars_form.csrf_token(id=False) }}
     <header class="border-b">
       <h2>{{ _('Environment variables') }}</h2>
-      <p>{{ _('Variables available at build time and runtime. Changes will take effect after a new deployment.') }}</p>
+      <p>{{ _('Variables are available at runtime and to zero-config build commands. Dockerfile builds do not receive project secrets. Changes take effect after a new deployment.') }}</p>
     </header>
 
     <section class=" space-y-6">

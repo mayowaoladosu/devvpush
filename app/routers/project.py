@@ -85,6 +85,8 @@ DEPLOYMENTS_PER_PAGE = 25
 
 
 def _is_runner_valid(project: Project, settings: Settings, request: Request) -> bool:
+    if DeploymentService.uses_dockerfile(project.config):
+        return True
     project_runner_slug = project.config.get("runner") or project.config.get("image")
     if not project_runner_slug:
         flash(
@@ -232,6 +234,7 @@ async def new_project_details(
         if fragment == "build_and_deploy":
             detection = None
             detected_apps = []
+            form.build_strategy.data = "zero-config"
             try:
                 github_oauth_token = await get_user_github_token(db, current_user)
                 if github_oauth_token:
@@ -248,6 +251,14 @@ async def new_project_details(
                         ),
                         timeout=12.0,
                     )
+
+                    form.build_strategy.data = (
+                        detection.get("build_strategy") or "zero-config"
+                    )
+                    form.dockerfile_path.data = detection.get("dockerfile_path")
+                    root_directory = detection.get("root_directory")
+                    if root_directory:
+                        form.root_directory.data = root_directory
 
                     # If preset detected, get preset config and set all form fields
                     if detection["preset"]:
@@ -266,9 +277,9 @@ async def new_project_details(
                             form.runner.data = detection.get(
                                 "runner"
                             ) or preset_config.get("runner")
-                            root_directory = detection.get(
+                            root_directory = root_directory or preset_config.get(
                                 "root_directory"
-                            ) or preset_config.get("root_directory")
+                            )
                             if root_directory:
                                 form.root_directory.data = root_directory
                             form.build_command.data = detection.get(
@@ -281,15 +292,16 @@ async def new_project_details(
                                 "pre_deploy_command"
                             ) or preset_config.get("pre_deploy_command")
 
-                            recommended = {
-                                key: value
-                                for key, value in detection.items()
-                                if key != "alternatives"
-                            }
-                            detected_apps = [
-                                recommended,
-                                *(detection.get("alternatives") or []),
-                            ]
+                    recommended = {
+                        key: value
+                        for key, value in detection.items()
+                        if key != "alternatives"
+                    }
+                    if detection.get("preset") or detection.get("dockerfile_path"):
+                        detected_apps = [
+                            recommended,
+                            *(detection.get("alternatives") or []),
+                        ]
 
             except asyncio.TimeoutError:
                 logger.warning(f"Framework detection timed out for repo {repo_id}")
@@ -373,11 +385,23 @@ async def new_project_details(
             github_installation=github_installation,
             config={
                 "preset": form.preset.data,
-                "runner": form.runner.data,
+                "build_strategy": form.build_strategy.data,
+                "runner": form.runner.data
+                if form.build_strategy.data != "dockerfile"
+                else None,
                 "root_directory": form.root_directory.data,
-                "build_command": form.build_command.data,
-                "pre_deploy_command": form.pre_deploy_command.data,
-                "start_command": form.start_command.data,
+                "dockerfile_path": form.dockerfile_path.data
+                if form.build_strategy.data == "dockerfile"
+                else None,
+                "build_command": form.build_command.data
+                if form.build_strategy.data != "dockerfile"
+                else "",
+                "pre_deploy_command": form.pre_deploy_command.data
+                if form.build_strategy.data != "dockerfile"
+                else "",
+                "start_command": form.start_command.data
+                if form.build_strategy.data != "dockerfile"
+                else "",
             },
             env_vars=env_vars,
             environments=[
@@ -1790,8 +1814,11 @@ async def project_settings(
         request,
         data={
             "preset": project.config.get("preset"),
+            "build_strategy": project.config.get("build_strategy")
+            or "zero-config",
             "runner": project.config.get("runner") or project.config.get("image"),
             "root_directory": project.config.get("root_directory"),
+            "dockerfile_path": project.config.get("dockerfile_path"),
             "build_command": project.config.get("build_command"),
             "pre_deploy_command": project.config.get("pre_deploy_command"),
             "start_command": project.config.get("start_command"),
@@ -1803,11 +1830,23 @@ async def project_settings(
             project_config = {
                 **project.config,
                 "preset": build_and_deploy_form.preset.data,
-                "runner": build_and_deploy_form.runner.data,
+                "build_strategy": build_and_deploy_form.build_strategy.data,
+                "runner": build_and_deploy_form.runner.data
+                if build_and_deploy_form.build_strategy.data != "dockerfile"
+                else None,
                 "root_directory": build_and_deploy_form.root_directory.data,
-                "build_command": build_and_deploy_form.build_command.data,
-                "pre_deploy_command": build_and_deploy_form.pre_deploy_command.data,
-                "start_command": build_and_deploy_form.start_command.data,
+                "dockerfile_path": build_and_deploy_form.dockerfile_path.data
+                if build_and_deploy_form.build_strategy.data == "dockerfile"
+                else None,
+                "build_command": build_and_deploy_form.build_command.data
+                if build_and_deploy_form.build_strategy.data != "dockerfile"
+                else "",
+                "pre_deploy_command": build_and_deploy_form.pre_deploy_command.data
+                if build_and_deploy_form.build_strategy.data != "dockerfile"
+                else "",
+                "start_command": build_and_deploy_form.start_command.data
+                if build_and_deploy_form.build_strategy.data != "dockerfile"
+                else "",
             }
             project_config.pop("image", None)
             project.config = project_config

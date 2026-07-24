@@ -1,24 +1,60 @@
 import asyncio
-import aiodocker
 import logging
+import shlex
+from pathlib import Path
+
+import aiodocker
+from arq.connections import ArqRedis
 from sqlalchemy import select, true
 from sqlalchemy.orm import joinedload
-from pathlib import Path
-import shlex
 
-from models import Alias, Deployment, Project
+from config import get_settings
 from db import AsyncSessionLocal
 from dependencies import (
-    get_redis_client,
     get_github_installation_service,
+    get_redis_client,
 )
-from config import get_settings
-from arq.connections import ArqRedis
+from models import Alias, Deployment, Project
 from services.deployment import DeploymentService
-from services.registry import RegistryService
+from services.dockerfile_builder import (
+    DockerfileBuilder,
+    DockerfileBuildSpec,
+    is_managed_deployment_image,
+    remove_managed_deployment_image,
+    validate_dockerfile_runtime_image,
+)
 from services.loki import LokiService
+from services.registry import RegistryService
 
 logger = logging.getLogger(__name__)
+
+_build_semaphore: asyncio.Semaphore | None = None
+_build_semaphore_limit: int | None = None
+
+
+def _get_build_semaphore(limit: int) -> asyncio.Semaphore:
+    global _build_semaphore, _build_semaphore_limit
+    if _build_semaphore is None or _build_semaphore_limit != limit:
+        _build_semaphore = asyncio.Semaphore(limit)
+        _build_semaphore_limit = limit
+    return _build_semaphore
+
+
+def _get_dockerfile_builder(settings) -> DockerfileBuilder:
+    proxy_url = settings.buildkit_proxy_url.strip()
+    if not proxy_url:
+        raise RuntimeError("BuildKit egress proxy address is unavailable.")
+    return DockerfileBuilder(
+        buildkit_host=settings.buildkit_host,
+        docker_host=settings.docker_host,
+        proxy_url=proxy_url,
+        timeout_seconds=settings.dockerfile_build_timeout_seconds,
+        image_load_timeout_seconds=settings.dockerfile_image_load_timeout_seconds,
+        max_archive_bytes=settings.dockerfile_max_archive_bytes,
+        max_context_bytes=settings.dockerfile_max_context_bytes,
+        max_context_files=settings.dockerfile_max_context_files,
+        max_image_bytes=settings.dockerfile_max_image_bytes,
+    )
 
 
 async def _push_loki_log(
@@ -41,14 +77,52 @@ async def _push_loki_log(
         logger.warning("Failed to push log to Loki: %s", exc)
 
 
+async def _cleanup_startup_resources(
+    *,
+    deployment: Deployment,
+    container,
+    image_reference: str | None,
+    settings,
+    loki: LokiService | None,
+) -> None:
+    """Remove resources that may exist before normal lifecycle tracking begins."""
+    async with aiodocker.Docker(url=settings.docker_host) as docker_client:
+        container_identifier = getattr(container, "id", None) or (
+            f"runner-{deployment.id}"
+        )
+        try:
+            tracked_container = await docker_client.containers.get(
+                container_identifier
+            )
+        except aiodocker.DockerError as error:
+            if error.status != 404:
+                raise
+        else:
+            if loki:
+                await loki.preserve_container_logs(tracked_container, deployment)
+            try:
+                await tracked_container.stop()
+            except Exception:
+                pass
+            await tracked_container.delete(force=True)
+
+        await remove_managed_deployment_image(
+            docker_client,
+            image_reference or deployment.image,
+        )
+
+
 async def start_deployment(ctx, deployment_id: str):
     """Starts a deployment."""
+    settings = get_settings()
+    log_prefix = f"[DeployStart:{deployment_id}]"
     container = None
+    deployment = None
+    managed_image_reference = None
     loki: LokiService | None = None
+    failure_stage = "prepare"
     try:
-        settings = get_settings()
         redis_client = get_redis_client()
-        log_prefix = f"[DeployStart:{deployment_id}]"
         logger.info(f"{log_prefix} Starting deployment")
 
         github_installation_service = get_github_installation_service()
@@ -80,69 +154,111 @@ async def start_deployment(ctx, deployment_id: str):
                 mounts = await DeploymentService().get_runtime_mounts(
                     deployment, db, settings
                 )
+                config = deployment.config or {}
+                uses_dockerfile = DeploymentService.uses_dockerfile(config)
 
-                # Prepare commands
                 commands = []
-
-                # Step 1: Clone the repository
-                commands.append(
-                    f"echo 'Cloning {deployment.repo_full_name} (Branch: {deployment.branch}, Commit: {deployment.commit_sha[:7]})'"
-                )
                 github_installation = (
                     await github_installation_service.get_or_refresh_installation(
                         deployment.project.github_installation_id, db
                     )
                 )
-                env_vars_dict["DEVPUSH_GITHUB_TOKEN"] = github_installation.token
-                commands.append(
-                    "git init -q && "
-                    "printf '%s\n' "
-                    "'#!/bin/sh' "
-                    '\'case "$1" in *Username*) echo "x-access-token";; *) echo "$DEVPUSH_GITHUB_TOKEN";; esac\' '
-                    "> /tmp/devpush-git-askpass && "
-                    "chmod 700 /tmp/devpush-git-askpass && "
-                    "export GIT_ASKPASS=/tmp/devpush-git-askpass GIT_TERMINAL_PROMPT=0 && "
-                    f"git fetch -q --depth 1 https://github.com/{deployment.repo_full_name}.git {deployment.commit_sha} && "
-                    "git checkout -q FETCH_HEAD && "
-                    "unset GIT_ASKPASS GIT_TERMINAL_PROMPT DEVPUSH_GITHUB_TOKEN && "
-                    "rm -f /tmp/devpush-git-askpass"
-                )
+                if not github_installation.token:
+                    raise ValueError("GitHub installation token missing.")
 
-                # Step 2: Change root directory
-                normalized_root_directory = (
-                    deployment.config.get("root_directory", "")
-                    .strip()
-                    .lstrip("./")
-                    .strip("/")
-                )
-                if normalized_root_directory not in ("", ".", "./"):
-                    quoted_root_directory = shlex.quote(normalized_root_directory)
+                runner_image = deployment.image
+                if uses_dockerfile:
+                    image_available = False
+                    if is_managed_deployment_image(runner_image):
+                        try:
+                            await docker_client.images.get(runner_image)
+                            image_available = True
+                            await _push_loki_log(
+                                loki,
+                                deployment,
+                                f"Reusing built image ({runner_image})",
+                            )
+                        except aiodocker.DockerError as error:
+                            if error.status != 404:
+                                raise
+
+                    if not image_available:
+                        spec = DockerfileBuildSpec(
+                            deployment_id=deployment.id,
+                            project_id=deployment.project_id,
+                            repo_full_name=deployment.repo_full_name,
+                            commit_sha=deployment.commit_sha,
+                            source_token=github_installation.token,
+                            root_directory=str(config.get("root_directory") or ""),
+                            dockerfile_path=str(
+                                config.get("dockerfile_path") or "Dockerfile"
+                            ),
+                        )
+                        managed_image_reference = spec.image_reference
+
+                        async def build_log(message: str) -> None:
+                            await _push_loki_log(loki, deployment, message)
+
+                        semaphore = _get_build_semaphore(
+                            settings.dockerfile_build_max_concurrency
+                        )
+                        async with semaphore:
+                            builder = _get_dockerfile_builder(settings)
+                            result = await builder.build(spec, build_log)
+                        runner_image = result.image_reference
+                        deployment.image = runner_image
+                        await db.commit()
+                else:
+                    # Clone the selected revision inside the language runner.
                     commands.append(
-                        f"echo 'Changing root directory to {normalized_root_directory}'"
+                        f"echo 'Cloning {deployment.repo_full_name} (Branch: {deployment.branch}, Commit: {deployment.commit_sha[:7]})'"
                     )
+                    env_vars_dict["DEVPUSH_GITHUB_TOKEN"] = github_installation.token
                     commands.append(
-                        f"test -d {quoted_root_directory} || {{ printf '\\033[31mError: root directory %s not found\\033[0m\\n' {quoted_root_directory} 1>&2; exit 1; }}"
-                    )
-                    commands.append(f"cd {quoted_root_directory}")
-
-                # Step 3: Install dependencies
-                if deployment.config.get("build_command"):
-                    commands.append("echo 'Installing dependencies...'")
-                    commands.append(f"( {deployment.config.get('build_command')} )")
-
-                # Step 4: Run pre-deploy command
-                if deployment.config.get("pre_deploy_command"):
-                    commands.append("echo 'Running pre-deploy command...'")
-                    commands.append(
-                        f"( {deployment.config.get('pre_deploy_command')} )"
+                        "git init -q && "
+                        "printf '%s\n' "
+                        "'#!/bin/sh' "
+                        '\'case "$1" in *Username*) echo "x-access-token";; *) echo "$DEVPUSH_GITHUB_TOKEN";; esac\' '
+                        "> /tmp/devpush-git-askpass && "
+                        "chmod 700 /tmp/devpush-git-askpass && "
+                        "export GIT_ASKPASS=/tmp/devpush-git-askpass GIT_TERMINAL_PROMPT=0 && "
+                        f"git fetch -q --depth 1 https://github.com/{deployment.repo_full_name}.git {deployment.commit_sha} && "
+                        "git checkout -q FETCH_HEAD && "
+                        "unset GIT_ASKPASS GIT_TERMINAL_PROMPT DEVPUSH_GITHUB_TOKEN && "
+                        "rm -f /tmp/devpush-git-askpass"
                     )
 
-                # Step 5: Start the application
-                commands.append("echo 'Starting application...'")
-                commands.append(f"( {deployment.config.get('start_command')} )")
+                    normalized_root_directory = (
+                        str(config.get("root_directory") or "")
+                        .strip()
+                        .lstrip("./")
+                        .strip("/")
+                    )
+                    if normalized_root_directory not in ("", ".", "./"):
+                        quoted_root_directory = shlex.quote(
+                            normalized_root_directory
+                        )
+                        commands.append(
+                            f"echo 'Changing root directory to {normalized_root_directory}'"
+                        )
+                        commands.append(
+                            f"test -d {quoted_root_directory} || {{ printf '\\033[31mError: root directory %s not found\\033[0m\\n' {quoted_root_directory} 1>&2; exit 1; }}"
+                        )
+                        commands.append(f"cd {quoted_root_directory}")
+
+                    if config.get("build_command"):
+                        commands.append("echo 'Installing dependencies...'")
+                        commands.append(f"( {config.get('build_command')} )")
+
+                    if config.get("pre_deploy_command"):
+                        commands.append("echo 'Running pre-deploy command...'")
+                        commands.append(f"( {config.get('pre_deploy_command')} )")
+
+                    commands.append("echo 'Starting application...'")
+                    commands.append(f"( {config.get('start_command')} )")
 
                 # Setup container configuration
-                container_name = f"runner-{deployment.id[:7]}"
+                container_name = f"runner-{deployment.id}"
                 router = f"deployment-{deployment.id}"
 
                 labels = {
@@ -168,8 +284,6 @@ async def start_deployment(ctx, deployment_id: str):
                     )
                 else:
                     labels[f"traefik.http.routers.{router}.entrypoints"] = "web"
-
-                config = deployment.config or {}
 
                 cpus: float | None = settings.default_cpus
                 memory_mb: int | None = settings.default_memory_mb
@@ -200,7 +314,6 @@ async def start_deployment(ctx, deployment_id: str):
                         if override_memory_mb > 0:
                             memory_mb = min(override_memory_mb, max_memory_mb)
 
-                runner_image = deployment.image
                 if not runner_image:
                     runner_slug = config.get("runner") or config.get("image")
                     if not runner_slug:
@@ -225,7 +338,9 @@ async def start_deployment(ctx, deployment_id: str):
                     "Checking runner image availability...",
                 )
                 try:
-                    await docker_client.images.get(runner_image)
+                    image_info = await docker_client.images.inspect(runner_image)
+                    if uses_dockerfile:
+                        validate_dockerfile_runtime_image(image_info)
                     await _push_loki_log(
                         loki,
                         deployment,
@@ -233,6 +348,10 @@ async def start_deployment(ctx, deployment_id: str):
                     )
                 except aiodocker.DockerError as error:
                     if error.status == 404:
+                        if uses_dockerfile:
+                            raise ValueError(
+                                "Built Dockerfile image is unavailable after loading."
+                            ) from error
                         await _push_loki_log(
                             loki,
                             deployment,
@@ -264,39 +383,60 @@ async def start_deployment(ctx, deployment_id: str):
 
                 # Create and start container
                 try:
-                    container = await docker_client.containers.create_or_replace(
-                        name=container_name,
-                        config={
-                            "Image": runner_image,
-                            "Cmd": ["/bin/sh", "-c", " && ".join(commands)],
-                            "Env": [f"{k}={v}" for k, v in env_vars_dict.items()],
-                            "WorkingDir": "/app",
-                            "Labels": labels,
-                            "NetworkingConfig": {
-                                "EndpointsConfig": {"devpush_runner": {}}
-                            },
-                            "HostConfig": {
-                                **(
-                                    {
-                                        "CpuQuota": int(cpus * 100000),
-                                        "CpuPeriod": 100000,
-                                    }
-                                    if cpus is not None and cpus > 0
-                                    else {}
-                                ),
-                                **(
-                                    {"Memory": memory_mb * 1024 * 1024}
-                                    if memory_mb is not None and memory_mb > 0
-                                    else {}
-                                ),
-                                **({"Binds": mounts} if mounts else {}),
-                                "SecurityOpt": ["no-new-privileges:true"],
-                                "LogConfig": {
-                                    "Type": "json-file",
-                                    "Config": {"max-size": "10m", "max-file": "5"},
-                                },
+                    container_config = {
+                        "Image": runner_image,
+                        "Env": [f"{k}={v}" for k, v in env_vars_dict.items()],
+                        "Labels": labels,
+                        "NetworkingConfig": {
+                            "EndpointsConfig": {"devpush_runner": {}}
+                        },
+                        "HostConfig": {
+                            **(
+                                {
+                                    "CpuQuota": int(cpus * 100000),
+                                    "CpuPeriod": 100000,
+                                }
+                                if cpus is not None and cpus > 0
+                                else {}
+                            ),
+                            **(
+                                {"Memory": memory_mb * 1024 * 1024}
+                                if memory_mb is not None and memory_mb > 0
+                                else {}
+                            ),
+                            **({"Binds": mounts} if mounts else {}),
+                            "CapDrop": ["ALL"],
+                            **(
+                                {
+                                    "CapAdd": [
+                                        "CHOWN",
+                                        "DAC_OVERRIDE",
+                                        "FOWNER",
+                                        "SETGID",
+                                        "SETUID",
+                                    ]
+                                }
+                                if not uses_dockerfile
+                                else {}
+                            ),
+                            "PidsLimit": settings.runtime_pids_limit,
+                            "SecurityOpt": ["no-new-privileges:true"],
+                            "LogConfig": {
+                                "Type": "json-file",
+                                "Config": {"max-size": "10m", "max-file": "5"},
                             },
                         },
+                    }
+                    if not uses_dockerfile:
+                        container_config.update(
+                            {
+                                "Cmd": ["/bin/sh", "-c", " && ".join(commands)],
+                                "WorkingDir": "/app",
+                            }
+                        )
+                    container = await docker_client.containers.create_or_replace(
+                        name=container_name,
+                        config=container_config,
                     )
                 except aiodocker.DockerError as error:
                     queue: ArqRedis = ctx["redis"]
@@ -318,10 +458,12 @@ async def start_deployment(ctx, deployment_id: str):
                     )
                     return
 
+                deployment.container_id = container.id
+                await db.commit()
                 await container.start()
 
                 # Save container info
-                deployment.container_id = container.id
+                failure_stage = "deploy"
                 await DeploymentService.update_status(
                     db,
                     deployment,
@@ -336,7 +478,7 @@ async def start_deployment(ctx, deployment_id: str):
     except asyncio.CancelledError:
         logger.info(f"{log_prefix} Deployment canceled.")
 
-        if container:
+        if container and deployment:
             try:
                 try:
                     await container.stop()
@@ -376,12 +518,43 @@ async def start_deployment(ctx, deployment_id: str):
             except Exception as e:
                 logger.error(f"{log_prefix} Error updating deployment status: {e}")
 
+        elif deployment:
+            try:
+                await _cleanup_startup_resources(
+                    deployment=deployment,
+                    container=container,
+                    image_reference=managed_image_reference,
+                    settings=settings,
+                    loki=loki,
+                )
+            except Exception:
+                logger.warning(
+                    "%s Could not remove canceled startup resources.",
+                    log_prefix,
+                    exc_info=True,
+                )
+
     except Exception as e:
+        if deployment:
+            try:
+                await _cleanup_startup_resources(
+                    deployment=deployment,
+                    container=container,
+                    image_reference=managed_image_reference,
+                    settings=settings,
+                    loki=loki,
+                )
+            except Exception:
+                logger.warning(
+                    "%s Could not remove failed startup resources.",
+                    log_prefix,
+                    exc_info=True,
+                )
         queue: ArqRedis = ctx["redis"]
         await queue.enqueue_job(
             "fail_deployment",
             deployment_id,
-            "deploy",
+            failure_stage,
             f"Deployment failed unexpectedly: {e}",
         )
         logger.info(f"{log_prefix} Deployment startup failed.", exc_info=True)
@@ -563,6 +736,21 @@ async def fail_deployment(
                     exc_info=True,
                 )
 
+        if not deployment.container_id or deployment.container_status == "removed":
+            try:
+                async with aiodocker.Docker(url=settings.docker_host) as docker_client:
+                    removed = await remove_managed_deployment_image(
+                        docker_client, deployment.image
+                    )
+                    if removed:
+                        logger.info("%s Removed failed build image.", log_prefix)
+            except Exception:
+                logger.warning(
+                    "%s Could not remove failed build image.",
+                    log_prefix,
+                    exc_info=True,
+                )
+
         await service.update_status(
             db,
             deployment,
@@ -581,27 +769,35 @@ async def delete_container(ctx, deployment_id: str):
     settings = get_settings()
     async with AsyncSessionLocal() as db:
         deployment = await db.get(Deployment, deployment_id)
-        if not deployment or not deployment.container_id:
-            logger.warning(f"{log_prefix} Deployment or container not found")
+        if not deployment:
+            logger.warning(f"{log_prefix} Deployment not found")
             return
 
         try:
             async with aiodocker.Docker(url=settings.docker_host) as docker_client:
-                try:
-                    container = await docker_client.containers.get(
-                        deployment.container_id
-                    )
+                if deployment.container_id:
                     try:
-                        await container.stop()
-                    except Exception:
-                        pass
-                    await container.delete(force=True)
-                    deployment.container_status = "removed"
-                    await db.commit()
-                except aiodocker.DockerError as error:
-                    if error.status == 404:
+                        container = await docker_client.containers.get(
+                            deployment.container_id
+                        )
+                        try:
+                            await container.stop()
+                        except Exception:
+                            pass
+                        await container.delete(force=True)
                         deployment.container_status = "removed"
-                        await db.commit()
+                    except aiodocker.DockerError as error:
+                        if error.status == 404:
+                            deployment.container_status = "removed"
+                        else:
+                            raise
+
+                removed_image = await remove_managed_deployment_image(
+                    docker_client, deployment.image
+                )
+                if removed_image:
+                    logger.info(f"{log_prefix} Removed deployment image")
+                await db.commit()
         except Exception:
             logger.error(
                 f"[DeleteContainer:{deployment_id}] Error deleting container.",
@@ -708,6 +904,9 @@ async def cleanup_inactive_containers(
                             await container.delete()
                             deployment.container_status = "removed"
                             removed_count += 1
+                            await remove_managed_deployment_image(
+                                docker_client, deployment.image
+                            )
                             logger.info(
                                 f"[CleanupInactiveContainers:{project_id}] Removed container {deployment.container_id}"
                             )
@@ -718,6 +917,10 @@ async def cleanup_inactive_containers(
                                 f"[CleanupInactiveContainers:{project_id}] Container {deployment.container_id} not found"
                             )
                             deployment.container_status = None
+                            if remove_containers:
+                                await remove_managed_deployment_image(
+                                    docker_client, deployment.image
+                                )
                         else:
                             logger.error(
                                 f"[CleanupInactiveContainers:{project_id}] Docker error: {error}"
