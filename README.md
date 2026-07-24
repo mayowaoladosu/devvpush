@@ -80,6 +80,11 @@ The stack auto-detects development mode on macOS and enables hot reloading. Data
 Default runner/preset definitions ship in `registry/` and are copied to `DATA_DIR/registry/` during install/update.
 See `registry/README.md` for the catalog format and override rules.
 
+Project import automatically detects framework applications and monorepo roots
+from GitHub. It understands 40+ presets, package managers and lockfiles, static
+outputs, framework adapters, and Dockerfile evidence, then fills editable build
+and start settings before deployment.
+
 **Key scripts**:
 
 - `./scripts/start.sh` / `stop.sh` / `restart.sh` — manage the full stack or selected components (`--components <csv>`)
