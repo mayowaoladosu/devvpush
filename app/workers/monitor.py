@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import time
 from datetime import datetime, timezone
 
 import aiodocker
@@ -12,10 +13,44 @@ from config import get_settings
 from db import AsyncSessionLocal
 from models import Deployment
 from services.deployment import DeploymentService
+from services.deployment_diagnostics import DeploymentDiagnosticService
+from services.deployment_jobs import DeploymentJobs
+from services.deployment_reconciler import (
+    DeploymentReconciler,
+    DeploymentRecoveryIncident,
+)
+from workers.tasks.deployment import fail_deployment, finalize_deployment
 
 logger = logging.getLogger(__name__)
 
 deployment_probe_state = {}  # deployment_id -> {"container": container_obj, "probe_active": bool}
+
+
+async def _recover_lifecycle_job(
+    redis_pool: ArqRedis, incident: DeploymentRecoveryIncident
+) -> None:
+    ctx = {
+        "redis": redis_pool,
+        "job_id": f"watchdog-{incident.deployment_id}-{incident.deployment_status}",
+        "job_try": incident.attempt + 1,
+    }
+    if incident.deployment_status == "finalize":
+        await finalize_deployment(ctx, incident.deployment_id)
+        return
+
+    await fail_deployment(
+        ctx,
+        incident.deployment_id,
+        incident.stage,
+        incident.message,
+        incident.code,
+        "watchdog",
+        incident.details,
+        (
+            "The platform recovered this deployment automatically. Retry it, "
+            "and inspect worker health if the problem repeats."
+        ),
+    )
 
 
 def _parse_container_started_at(value: str | None) -> datetime | None:
@@ -87,12 +122,15 @@ async def _check_status(
                 "container": container,
                 "probe_active": True,
             }
-        except Exception:
-            await redis_pool.enqueue_job(
-                "fail_deployment",
+        except Exception as error:
+            await DeploymentJobs.enqueue_failure(
+                redis_pool,
                 deployment.id,
                 "deploy",
                 "Container stopped unexpectedly. Check the deployment logs for errors.",
+                code="container_unavailable",
+                source="monitor",
+                details={"error": error.__class__.__name__},
             )
             return
     else:
@@ -116,11 +154,18 @@ async def _check_status(
             fallback_started_at=created_at,
             timeout_seconds=get_settings().deployment_timeout_seconds,
         ):
-            await redis_pool.enqueue_job(
-                "fail_deployment",
+            await DeploymentJobs.enqueue_failure(
+                redis_pool,
                 deployment.id,
                 "deploy",
                 "Timed out waiting for app to respond on port 8000. Ensure your app starts an HTTP server on this port.",
+                code="readiness_timeout",
+                source="monitor",
+                details={
+                    "timeout_seconds": get_settings().deployment_timeout_seconds,
+                    "container_status": status,
+                },
+                hint="Ensure the app listens on 0.0.0.0:8000 before the timeout.",
             )
             logger.warning(
                 f"{log_prefix} Deployment timed out; failure job enqueued."
@@ -140,11 +185,14 @@ async def _check_status(
                 )
             else:
                 reason = f"App exited with code {exit_code}. Check deployment logs for error details."
-            await redis_pool.enqueue_job(
-                "fail_deployment",
+            await DeploymentJobs.enqueue_failure(
+                redis_pool,
                 deployment.id,
                 "deploy",
                 reason,
+                code="container_exit",
+                source="monitor",
+                details={"exit_code": exit_code},
             )
             logger.warning(
                 f"{log_prefix} Deployment failed (failure job enqueued): {reason}"
@@ -161,7 +209,7 @@ async def _check_status(
                     status="finalize",
                     redis_client=redis_pool,
                 )
-                await redis_pool.enqueue_job("finalize_deployment", deployment.id)
+                await DeploymentJobs.enqueue_finalize(redis_pool, deployment.id)
                 logger.info(
                     f"{log_prefix} Deployment ready (finalization job enqueued)."
                 )
@@ -171,11 +219,15 @@ async def _check_status(
         logger.error(
             f"{log_prefix} Unexpected error while checking status.", exc_info=True
         )
-        await redis_pool.enqueue_job(
-            "fail_deployment",
+        await DeploymentJobs.enqueue_failure(
+            redis_pool,
             deployment.id,
             "deploy",
-            f"Unexpected error while monitoring deployment: {e}",
+            "Unexpected error while monitoring deployment: "
+            f"{DeploymentDiagnosticService.exception_message(e)}",
+            code="monitor_exception",
+            source="monitor",
+            details={"exception_type": e.__class__.__name__},
         )
         await _cleanup_deployment(deployment.id)
     finally:
@@ -212,13 +264,15 @@ async def monitor():
     settings = get_settings()
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     redis_pool = await create_pool(redis_settings)
+    reconciler = DeploymentReconciler(redis_pool, settings)
+    last_reconcile = 0.0
 
-    async with AsyncSessionLocal() as db:
-        async with aiodocker.Docker(url=settings.docker_host) as docker_client:
-            schema_ready = False
-            while True:
-                try:
-                    # Ensure schema exists to avoid logging spam before migrations
+    async with aiodocker.Docker(url=settings.docker_host) as docker_client:
+        schema_ready = False
+        while True:
+            try:
+                async with AsyncSessionLocal() as db:
+                    # Ensure schema exists to avoid logging spam before migrations.
                     if not schema_ready:
                         schema_ready = await db.run_sync(
                             lambda sync_session: inspect(
@@ -241,25 +295,33 @@ async def monitor():
                     )
                     deployment_ids = result.scalars().all()
 
-                    if deployment_ids:
-                        tasks = [
-                            _check_status_by_id(
-                                deployment_id,
-                                docker_client,
-                                redis_pool,
-                            )
-                            for deployment_id in deployment_ids
-                        ]
-                        await asyncio.gather(*tasks)
+                if deployment_ids:
+                    tasks = [
+                        _check_status_by_id(
+                            deployment_id,
+                            docker_client,
+                            redis_pool,
+                        )
+                        for deployment_id in deployment_ids
+                    ]
+                    await asyncio.gather(*tasks)
 
-                except exc.SQLAlchemyError as e:
-                    logger.error(f"Database error in monitor loop: {e}. Reconnecting.")
-                    await db.close()
-                    db = AsyncSessionLocal()
-                except Exception:
-                    logger.error("Critical error in monitor main loop", exc_info=True)
+                now = time.monotonic()
+                if (
+                    now - last_reconcile
+                    >= settings.deployment_reconcile_interval_seconds
+                ):
+                    await reconciler.run_once(
+                        lambda incident: _recover_lifecycle_job(redis_pool, incident)
+                    )
+                    last_reconcile = now
 
-                await asyncio.sleep(2)
+            except exc.SQLAlchemyError as e:
+                logger.error(f"Database error in monitor loop: {e}. Reconnecting.")
+            except Exception:
+                logger.error("Critical error in monitor main loop", exc_info=True)
+
+            await asyncio.sleep(2)
 
 
 if __name__ == "__main__":

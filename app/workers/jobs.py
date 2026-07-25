@@ -1,4 +1,7 @@
+import asyncio
 import logging
+import shutil
+from pathlib import Path
 
 from arq.connections import RedisSettings
 
@@ -25,6 +28,13 @@ from workers.tasks.user import delete_user
 logger = logging.getLogger(__name__)
 
 settings = get_settings()
+
+
+async def worker_startup(ctx):
+    work_root = Path("/tmp/devpush-builds")
+    if work_root.exists():
+        await asyncio.to_thread(shutil.rmtree, work_root, True)
+    work_root.mkdir(parents=True, exist_ok=True, mode=0o700)
 
 
 class WorkerSettings:
@@ -59,3 +69,4 @@ class WorkerSettings:
     max_tries = settings.job_max_tries
     health_check_interval = 65  # Greater than 60s to avoid health check timeout
     allow_abort_jobs = True
+    on_startup = worker_startup

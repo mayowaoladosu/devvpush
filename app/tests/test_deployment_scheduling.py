@@ -52,6 +52,10 @@ class FakeDb:
     def __init__(self, rows=None):
         self.rows = rows or []
         self.commits = 0
+        self.added = []
+
+    def add(self, value):
+        self.added.append(value)
 
     async def commit(self):
         self.commits += 1
@@ -261,7 +265,9 @@ class DeploymentSchedulingTests(unittest.IsolatedAsyncioTestCase):
         kwargs = update_status.await_args.kwargs
         self.assertEqual("completed", kwargs["status"])
         self.assertEqual("failed", kwargs["conclusion"])
-        self.assertEqual("queue", kwargs["error"]["status"])
+        self.assertEqual("prepare", kwargs["error"]["status"])
+        self.assertEqual("queue_admission_failed", kwargs["error"]["code"])
+        self.assertEqual("queue", kwargs["error"]["source"])
 
     async def test_superseded_webhooks_are_marked_skipped_and_cleaned(self):
         replacement = self.deployment("replacement-deployment")

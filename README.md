@@ -16,6 +16,7 @@ An open-source and self-hostable alternative to Vercel, Render, Netlify and the 
 - **Fast redeploys**: Reuse isolated package-manager downloads across zero-config deployments and rotate caches without disrupting running releases.
 - **Environment management**: Multiple environments with branch mapping and encrypted environment variables.
 - **Real-time monitoring**: Live and searchable build and runtime logs.
+- **Durable failure diagnostics**: Database-backed worker heartbeats and watchdog recovery keep crashes, timeouts, queue loss, and Loki outages visible to users.
 - **Team collaboration**: Role-based access control with team invitations and permissions.
 - **Custom domains**: Support for custom domain and automatic Let's Encrypt SSL certificates.
 - **Self-hosted and open source**: Run on your own servers, MIT licensed.
@@ -119,6 +120,14 @@ generation immediately for future deployments; generations still mounted by a
 current or rollback container are preserved until those containers are removed.
 Dockerfile projects continue to use BuildKit's bounded persistent layer cache.
 
+Deployment lifecycle jobs write a short database heartbeat independently from
+their build or Docker work. The monitor reconciles non-terminal deployments with
+ARQ state; a missing or expired worker lease is confirmed before recovery, so
+long Dockerfile builds remain valid while hard worker crashes become terminal
+failures with a structured code, source, attempt, hint, and timestamp. Small
+control-plane diagnostics are stored in PostgreSQL and merged into the existing
+logs UI, so useful failure context remains available when Loki is offline.
+
 **Key scripts**:
 
 - `./scripts/start.sh` / `stop.sh` / `restart.sh` — manage the full stack or selected components (`--components <csv>`)
@@ -204,6 +213,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for codebase structure.
 | `DEPLOYMENT_SCHEDULE_LOCK_SECONDS`  | Lease duration for serializing scheduling and alias promotion per environment. Default: `120`.                                          |
 | `DEPLOYMENT_SCHEDULE_WAIT_SECONDS`  | Maximum wait to acquire an environment scheduling lock. Default: `15`.                                                                   |
 | `DEPLOYMENT_ABORT_TIMEOUT_SECONDS`  | Maximum wait for a superseded or canceled job to acknowledge abort. Default: `5`.                                                       |
+| `DEPLOYMENT_WORKER_HEARTBEAT_SECONDS` | Interval between durable lifecycle worker heartbeats. Default: `5`.                                                                    |
+| `DEPLOYMENT_ORPHAN_TIMEOUT_SECONDS` | Time without a heartbeat before a running lifecycle job becomes suspicious. Default: `20`.                                             |
+| `DEPLOYMENT_ORPHAN_CONFIRM_SECONDS` | Additional confirmation window before watchdog recovery. Default: `10`.                                                                |
+| `DEPLOYMENT_QUEUE_GRACE_SECONDS`    | Grace period for an unclaimed lifecycle job after the jobs-worker health key expires. Default: `90`.                                   |
+| `DEPLOYMENT_RECONCILE_INTERVAL_SECONDS` | Interval between independent lifecycle reconciliation scans. Default: `5`.                                                         |
 | `DOCKERFILE_BUILD_TIMEOUT_SECONDS`  | Maximum Dockerfile build duration. Default: `900`.                                                                                       |
 | `DOCKERFILE_IMAGE_LOAD_TIMEOUT_SECONDS` | Maximum idle time for loading a built image into Docker. Default: `300`.                                                            |
 | `DOCKERFILE_BUILD_MAX_CONCURRENCY`  | Maximum concurrent Dockerfile builds per jobs worker. Default: `2`.                                                                     |

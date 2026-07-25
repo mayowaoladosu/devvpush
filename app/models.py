@@ -750,6 +750,14 @@ class Deployment(Base):
     image: Mapped[str | None] = mapped_column(String(512), nullable=True)
     _env_vars: Mapped[str] = mapped_column("env_vars", Text, nullable=False, default="")
     job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    worker_job_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, index=True
+    )
+    worker_phase: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    worker_attempt: Mapped[int] = mapped_column(nullable=False, default=0)
+    worker_heartbeat_at: Mapped[datetime | None] = mapped_column(
+        nullable=True, index=True
+    )
     error: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     container_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     container_status: Mapped[str | None] = mapped_column(
@@ -794,6 +802,11 @@ class Deployment(Base):
     )
     created_by_user: Mapped[User | None] = relationship(
         foreign_keys=[created_by_user_id]
+    )
+    diagnostics: Mapped[list["DeploymentDiagnostic"]] = relationship(
+        back_populates="deployment",
+        cascade="all, delete-orphan",
+        order_by="DeploymentDiagnostic.created_at",
     )
 
     def __init__(self, *args, project: "Project", environment_id: str, **kwargs):
@@ -851,6 +864,37 @@ class Deployment(Base):
     @property
     def parsed_logs(self):
         return self.parse_logs()
+
+
+class DeploymentDiagnostic(Base):
+    __tablename__: str = "deployment_diagnostic"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    deployment_id: Mapped[str] = mapped_column(
+        ForeignKey("deployment.id", ondelete="CASCADE"), index=True
+    )
+    level: Mapped[str] = mapped_column(String(16), nullable=False, default="ERROR")
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    stage: Mapped[str] = mapped_column(String(32), nullable=False)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    attempt: Mapped[int | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        index=True, nullable=False, default=utc_now
+    )
+
+    deployment: Mapped[Deployment] = relationship(back_populates="diagnostics")
+
+    __table_args__ = (
+        Index(
+            "ix_deployment_diagnostic_deployment_created",
+            "deployment_id",
+            "created_at",
+        ),
+    )
 
 
 class Alias(Base):

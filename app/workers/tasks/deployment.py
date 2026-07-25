@@ -16,6 +16,9 @@ from dependencies import (
 )
 from models import Alias, Deployment, Project
 from services.dependency_cache import DependencyCacheService
+from services.deployment_diagnostics import DeploymentDiagnosticService
+from services.deployment_heartbeat import deployment_heartbeat
+from services.deployment_jobs import DeploymentJobs
 from services.deployment import DeploymentService
 from services.dockerfile_builder import (
     DockerfileBuilder,
@@ -76,6 +79,18 @@ async def _push_loki_log(
         await loki.push_log(labels, line)
     except Exception as exc:
         logger.warning("Failed to push log to Loki: %s", exc)
+        await DeploymentDiagnosticService.record_once(
+            deployment.id,
+            level="WARNING",
+            source="loki",
+            stage=deployment.status or "prepare",
+            code="loki_write_failed",
+            message=(
+                "Live log delivery is temporarily unavailable. "
+                "Control-plane diagnostics are still being stored."
+            ),
+            details={"error": exc.__class__.__name__},
+        )
 
 
 async def _cleanup_startup_resources(
@@ -156,6 +171,7 @@ async def _cleanup_if_concluded(
     return True
 
 
+@deployment_heartbeat("prepare")
 async def start_deployment(ctx, deployment_id: str):
     """Starts a deployment."""
     settings = get_settings()
@@ -554,11 +570,14 @@ async def start_deployment(ctx, deployment_id: str):
                         reason = "Port conflict. Another deployment may be using the same port."
                     else:
                         reason = f"Failed to create container: {error}"
-                    await queue.enqueue_job(
-                        "fail_deployment",
+                    await DeploymentJobs.enqueue_failure(
+                        queue,
                         deployment_id,
                         "prepare",
                         reason,
+                        code="container_create_failed",
+                        source="docker",
+                        details={"docker_status": error.status},
                     )
                     logger.error(
                         f"{log_prefix} Failed to start container for {deployment.id}: {error}"
@@ -633,7 +652,13 @@ async def start_deployment(ctx, deployment_id: str):
 
             try:
                 async with AsyncSessionLocal() as db:
-                    current_deployment = await db.get(Deployment, deployment_id)
+                    current_deployment = (
+                        await db.execute(
+                            select(Deployment)
+                            .options(joinedload(Deployment.project))
+                            .where(Deployment.id == deployment_id)
+                        )
+                    ).scalar_one_or_none()
                     if current_deployment:
                         values = {
                             "status": "completed",
@@ -645,7 +670,34 @@ async def start_deployment(ctx, deployment_id: str):
                             "redis_client": get_redis_client(),
                         }
                         if not current_deployment.conclusion:
-                            values["conclusion"] = "canceled"
+                            message = (
+                                "The deployment worker was interrupted before "
+                                "startup completed."
+                            )
+                            payload = DeploymentDiagnosticService.failure_payload(
+                                stage=failure_stage,
+                                code="worker_interrupted",
+                                message=message,
+                                source="worker",
+                                attempt=int(ctx.get("job_try") or 0),
+                                hint=(
+                                    "Retry the deployment. If this repeats, inspect "
+                                    "the jobs worker health and resource limits."
+                                ),
+                            )
+                            await DeploymentDiagnosticService.record(
+                                db,
+                                deployment_id,
+                                level="ERROR",
+                                source="worker",
+                                stage=failure_stage,
+                                code="worker_interrupted",
+                                message=message,
+                                details={"job_id": ctx.get("job_id")},
+                                attempt=int(ctx.get("job_try") or 0),
+                            )
+                            values["conclusion"] = "failed"
+                            values["error"] = payload
                         await DeploymentService.update_status(
                             db,
                             current_deployment,
@@ -687,11 +739,16 @@ async def start_deployment(ctx, deployment_id: str):
                     exc_info=True,
                 )
         queue: ArqRedis = ctx["redis"]
-        await queue.enqueue_job(
-            "fail_deployment",
+        await DeploymentJobs.enqueue_failure(
+            queue,
             deployment_id,
             failure_stage,
-            f"Deployment failed unexpectedly: {e}",
+            "Deployment failed unexpectedly: "
+            f"{DeploymentDiagnosticService.exception_message(e)}",
+            code="startup_exception",
+            source="worker",
+            details={"exception_type": e.__class__.__name__},
+            hint="Review the control-plane diagnostics and retry the deployment.",
         )
         logger.info(f"{log_prefix} Deployment startup failed.", exc_info=True)
     finally:
@@ -699,6 +756,7 @@ async def start_deployment(ctx, deployment_id: str):
             await loki.client.aclose()
 
 
+@deployment_heartbeat("finalize")
 async def finalize_deployment(ctx, deployment_id: str):
     """Finalizes a deployment, setting up aliases and updating Traefik config."""
     settings = get_settings()
@@ -759,6 +817,19 @@ async def finalize_deployment(ctx, deployment_id: str):
                         logger.error(
                             f"{log_prefix} Failed to update Traefik config: {e}"
                         )
+                        await DeploymentDiagnosticService.record_external(
+                            deployment.id,
+                            level="ERROR",
+                            source="routing",
+                            stage="finalize",
+                            code="routing_config_failed",
+                            message=(
+                                "The deployment started, but its environment routing "
+                                "configuration could not be regenerated."
+                            ),
+                            details={"error": e.__class__.__name__},
+                            attempt=int(ctx.get("job_try") or 0),
+                        )
                 else:
                     logger.info(
                         "%s Newer successful deployment already owns routing; "
@@ -787,16 +858,27 @@ async def finalize_deployment(ctx, deployment_id: str):
         except Exception:
             logger.error(f"{log_prefix} Error finalizing deployment.", exc_info=True)
             if queue:
-                await queue.enqueue_job(
-                    "fail_deployment",
+                await DeploymentJobs.enqueue_failure(
+                    queue,
                     deployment_id,
                     "finalize",
                     "Failed to finalize deployment (aliases/routing). The app may still be running.",
+                    code="finalize_failed",
+                    source="worker",
+                    hint="Retry the deployment if the environment route does not recover.",
                 )
 
 
+@deployment_heartbeat("fail")
 async def fail_deployment(
-    ctx, deployment_id: str, status: str, reason: str | None = None
+    ctx,
+    deployment_id: str,
+    status: str,
+    reason: str | None = None,
+    code: str = "deployment_failed",
+    source: str = "worker",
+    details: dict | None = None,
+    hint: str | None = None,
 ):
     """Handles a failed deployment, cleaning up resources."""
     log_prefix = f"[DeployFail:{deployment_id}]"
@@ -826,6 +908,29 @@ async def fail_deployment(
                 deployment.conclusion,
             )
             return
+
+        safe_reason = DeploymentDiagnosticService.sanitize(
+            reason or "Deployment failed", 2_000
+        )
+        attempt = int(ctx.get("job_try") or deployment.worker_attempt or 0)
+        try:
+            await DeploymentDiagnosticService.record(
+                db,
+                deployment.id,
+                level="ERROR",
+                source=source,
+                stage=status,
+                code=code,
+                message=safe_reason,
+                details=details,
+                attempt=attempt,
+            )
+        except Exception:
+            logger.warning(
+                "%s Could not persist structured diagnostics.",
+                log_prefix,
+                exc_info=True,
+            )
 
         await service.update_status(
             db,
@@ -918,7 +1023,15 @@ async def fail_deployment(
             deployment,
             status="completed",
             conclusion="failed",
-            error={"status": status, "message": reason or "Deployment failed"},
+            error=DeploymentDiagnosticService.failure_payload(
+                stage=status,
+                code=code,
+                message=safe_reason,
+                source=source,
+                attempt=attempt,
+                hint=hint,
+                details=details,
+            ),
             redis_client=redis_client,
         )
         logger.error(f"{log_prefix} Deployment failed and cleaned up.")

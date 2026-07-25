@@ -68,6 +68,7 @@ from db import get_db
 from services.github import GitHubService
 from services.github_installation import GitHubInstallationService
 from services.dependency_cache import DependencyCacheService
+from services.deployment_diagnostics import DeploymentDiagnosticService
 from services.deployment import DeploymentService
 from services.domain import DomainService
 from services.preset_detector import PresetDetector
@@ -2267,6 +2268,7 @@ async def project_deployment(
     ):
         logs = []
         limit = 50
+        loki_available = True
         try:
             start_timestamp = None
             if fragment == "logs":
@@ -2288,6 +2290,26 @@ async def project_deployment(
             )
         except Exception as e:
             logger.error(f"Failed to retrieve logs: {e}")
+            loki_available = False
+
+        diagnostic_logs = await DeploymentDiagnosticService.get_logs(
+            db,
+            project_id=project.id,
+            deployment_id=deployment.id,
+            limit=limit,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+        )
+        logs = DeploymentDiagnosticService.merge_logs(
+            logs, diagnostic_logs, limit=limit
+        )
+        if not loki_available and diagnostic_logs:
+            flash(
+                request,
+                _("Runtime logs are unavailable; platform diagnostics are shown."),
+                "warning",
+            )
+        elif not loki_available:
             flash(request, _("Failed to retrieve logs."), "error")
 
         next_batch_url = None
@@ -2485,6 +2507,7 @@ async def project_logs(
 
         limit = 50
         logs = []
+        loki_available = True
         try:
             logs = await request.app.state.loki_service.get_logs(
                 project_id=project.id,
@@ -2499,6 +2522,29 @@ async def project_logs(
             )
         except Exception as e:
             logger.error(f"Failed to retrieve logs: {e}")
+            loki_available = False
+
+        diagnostic_logs = await DeploymentDiagnosticService.get_logs(
+            db,
+            project_id=project.id,
+            deployment_id=deployment_id,
+            environment_id=environment_id,
+            branch=branch,
+            keyword=keyword,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+            limit=limit,
+        )
+        logs = DeploymentDiagnosticService.merge_logs(
+            logs, diagnostic_logs, limit=limit
+        )
+        if not loki_available and diagnostic_logs:
+            flash(
+                request,
+                _("Runtime logs are unavailable; platform diagnostics are shown."),
+                "warning",
+            )
+        elif not loki_available:
             flash(request, _("Failed to retrieve logs."), "error")
 
         next_batch_url = None

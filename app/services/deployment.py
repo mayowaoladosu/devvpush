@@ -16,6 +16,7 @@ from models import Deployment, Alias, Project, User, Domain, Storage, StoragePro
 from utils.environment import get_environment_for_branch
 from config import Settings, get_settings
 from services.registry import RegistryService
+from services.deployment_diagnostics import DeploymentDiagnosticService
 
 logger = logging.getLogger(__name__)
 
@@ -93,6 +94,9 @@ class DeploymentService:
         if applied_conclusion is not None:
             deployment.conclusion = applied_conclusion
             deployment.concluded_at = now.replace(tzinfo=None)
+            deployment.worker_job_id = None
+            deployment.worker_phase = None
+            deployment.worker_heartbeat_at = None
             if deployment.project:
                 deployment.project.updated_at = now.replace(tzinfo=None)
         if error is not None:
@@ -615,15 +619,35 @@ class DeploymentService:
             try:
                 await self._ensure_start_job(deployment, db, queue)
             except Exception:
+                message = "Deployment could not be added to the build queue."
+                try:
+                    await DeploymentDiagnosticService.record(
+                        db,
+                        deployment.id,
+                        level="ERROR",
+                        source="queue",
+                        stage="prepare",
+                        code="queue_admission_failed",
+                        message=message,
+                    )
+                except Exception:
+                    logger.warning(
+                        "Could not persist queue failure diagnostic for %s.",
+                        deployment.id,
+                        exc_info=True,
+                    )
                 await self.update_status(
                     db,
                     deployment,
                     status="completed",
                     conclusion="failed",
-                    error={
-                        "status": "queue",
-                        "message": "Deployment could not be added to the build queue.",
-                    },
+                    error=DeploymentDiagnosticService.failure_payload(
+                        stage="prepare",
+                        code="queue_admission_failed",
+                        message=message,
+                        source="queue",
+                        hint="Retry after confirming the jobs worker and Redis are healthy.",
+                    ),
                     redis_client=redis_client,
                 )
                 raise

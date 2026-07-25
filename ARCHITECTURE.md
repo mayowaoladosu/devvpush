@@ -20,7 +20,7 @@ This document describes the high‑level architecture of /dev/push, how the main
 ## Overview
 
 - **App**: The app handles all of the user-facing logic (managing teams/projects, authenticating, searching logs...). It communicates with the workers via Redis.
-- **Workers**: Scheduling is serialized by project environment before an arq job is created. Webhook deliveries are idempotent and newest-commit-wins: older webhook jobs in `prepare` or `deploy` become skipped and are aborted/cleaned, while manual deploys are never superseded. The jobs worker starts a container, the monitor worker probes readiness, and the finalizer promotes aliases under the same environment lock. Deployment lifecycle statuses: `prepare → deploy → finalize → completed` (with `conclusion`: succeeded/failed/canceled/skipped; `fail` is transient for failure handling).
+- **Workers**: Scheduling is serialized by project environment before an arq job is created. Webhook deliveries are idempotent and newest-commit-wins: older webhook jobs in `prepare` or `deploy` become skipped and are aborted/cleaned, while manual deploys are never superseded. Lifecycle tasks maintain a database heartbeat. The independent monitor compares stale leases with deterministic ARQ job state and directly recovers abandoned prepare/fail/finalize work. The finalizer promotes aliases under the same environment lock. Deployment lifecycle statuses: `prepare → deploy → finalize → completed` (with `conclusion`: succeeded/failed/canceled/skipped; `fail` is transient for failure handling).
 - **Logs**: build and runtime logs are streamed from Loki and served to the user via an SSE endpoint in the app.
 - **Runners**: Zero-config apps run inside language containers pulled from the registry catalog. Dockerfile apps are built into immutable per-deployment images and run their image-defined command.
 - **Dependency cache**: Official zero-config runners direct package-manager caches to `/cache`. DevPush mounts a host-backed generation isolated by project, environment, and runner image. Cache clears rotate generations atomically; background pruning removes only generations no longer mounted by current, rollback, or stopped containers.
@@ -148,6 +148,7 @@ Notes:
 ### PostgreSQL
 
 - Primary datastore (users, teams, projects, deployments, aliases, domains, GitHub installations).
+- `deployment_diagnostic` stores redacted control-plane events independently from Loki; deployment rows carry the current worker job, phase, attempt, and heartbeat.
 
 ### Redis
 
@@ -216,6 +217,8 @@ Notes:
 ## Observability
 
 - Logs: runner containers -> Loki; app queries `Loki /loki/api/v1/query_range` and streams via SSE.
+- Durable diagnostics: workers/watchdog -> PostgreSQL; the app merges these events into deployment and project log views even when Loki is unavailable.
+- Recovery: active prepare/fail/finalize jobs heartbeat in PostgreSQL. The monitor confirms stale leases against ARQ state before failing or replaying lifecycle work.
 - Status: Redis Streams power SSE for project and deployment updates.
 - Health: app `/health`; ARQ `--check`; Docker Compose healthchecks for services.
 

@@ -197,8 +197,24 @@
     data-error-phase="{{ deployment.error.status }}"
   >
     {% include "icons/info.svg" %}
-    <section>
-      {{ deployment.error.message }}
+    <section class="space-y-2">
+      <div>{{ deployment.error.message }}</div>
+      {% if deployment.error.code or deployment.error.source or deployment.error.attempt %}
+        <div class="flex flex-wrap items-center gap-2 text-xs">
+          {% if deployment.error.code %}
+            <span class="badge-outline font-mono">{{ deployment.error.code }}</span>
+          {% endif %}
+          {% if deployment.error.source %}
+            <span class="badge-outline">{{ _('Source') }}: {{ deployment.error.source }}</span>
+          {% endif %}
+          {% if deployment.error.attempt %}
+            <span class="badge-outline">{{ _('Attempt') }} {{ deployment.error.attempt }}</span>
+          {% endif %}
+        </div>
+      {% endif %}
+      {% if deployment.error.hint %}
+        <p class="text-sm">{{ deployment.error.hint }}</p>
+      {% endif %}
       {% if deployment.conclusion == 'skipped' and deployment.error.deployment_id %}
         <a
           class="underline underline-offset-2"

@@ -62,6 +62,11 @@ class Settings(BaseSettings):
     deployment_schedule_lock_seconds: int = 120
     deployment_schedule_wait_seconds: int = 15
     deployment_abort_timeout_seconds: int = 5
+    deployment_worker_heartbeat_seconds: int = 5
+    deployment_orphan_timeout_seconds: int = 20
+    deployment_orphan_confirm_seconds: int = 10
+    deployment_queue_grace_seconds: int = 90
+    deployment_reconcile_interval_seconds: int = 5
     dockerfile_build_timeout_seconds: int = 900
     dockerfile_image_load_timeout_seconds: int = 300
     dockerfile_build_max_concurrency: int = 2
@@ -180,6 +185,22 @@ def get_settings():
     )
     settings.deployment_abort_timeout_seconds = max(
         1, settings.deployment_abort_timeout_seconds
+    )
+    settings.deployment_worker_heartbeat_seconds = max(
+        1, settings.deployment_worker_heartbeat_seconds
+    )
+    settings.deployment_orphan_timeout_seconds = max(
+        settings.deployment_worker_heartbeat_seconds * 2,
+        settings.deployment_orphan_timeout_seconds,
+    )
+    settings.deployment_orphan_confirm_seconds = max(
+        1, settings.deployment_orphan_confirm_seconds
+    )
+    settings.deployment_queue_grace_seconds = max(
+        1, settings.deployment_queue_grace_seconds
+    )
+    settings.deployment_reconcile_interval_seconds = max(
+        1, settings.deployment_reconcile_interval_seconds
     )
     settings.dockerfile_image_load_timeout_seconds = max(
         1, settings.dockerfile_image_load_timeout_seconds
