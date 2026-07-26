@@ -20,6 +20,7 @@ services:
       HOST_DATA_DIR: ${DATA_DIR:-../data}
       SERVICE_UID: ${SERVICE_UID}
       SERVICE_GID: ${SERVICE_GID}
+      PROMETHEUS_URL: http://prometheus:9090
     volumes:
       - ${DATA_DIR:-../data}:/data
     labels:
@@ -100,6 +101,94 @@ services:
       SERVICE_GID: ${SERVICE_GID}
     volumes:
       - ${DATA_DIR:-../data}:/data
+
+  metrics-exporter:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.metrics
+      args:
+        APP_UID: ${SERVICE_UID:-1000}
+        APP_GID: ${SERVICE_GID:-1000}
+    command:
+      - uv
+      - run
+      - --no-sync
+      - uvicorn
+      - metrics_exporter:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "9100"
+      - --loop
+      - uvloop
+      - --workers
+      - "1"
+      - --no-access-log
+    restart: unless-stopped
+    depends_on:
+      - docker-proxy
+    networks:
+      - internal
+    environment:
+      DOCKER_HOST: tcp://docker-proxy:2375
+      PYTHONDONTWRITEBYTECODE: "1"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    mem_limit: 192m
+    cpus: 0.5
+    pids_limit: 128
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=33554432
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9100/health"]
+      interval: 30s
+      start_interval: 2s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  prometheus:
+    image: prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996
+    restart: unless-stopped
+    depends_on:
+      metrics-exporter:
+        condition: service_healthy
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=${PROMETHEUS_RETENTION_TIME:-7d}
+      - --storage.tsdb.retention.size=${PROMETHEUS_RETENTION_SIZE:-2GB}
+    networks:
+      - internal
+    volumes:
+      - ${APP_DIR:-..}/docker/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    mem_limit: ${PROMETHEUS_MEMORY_LIMIT:-384m}
+    cpus: ${PROMETHEUS_CPUS:-0.75}
+    pids_limit: 256
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=33554432
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:9090/-/healthy",
+        ]
+      interval: 30s
+      start_interval: 2s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   redis:
     image: redis:alpine
@@ -305,6 +394,7 @@ volumes:
   alloy-data:
   buildkit-state:
   buildkit-socket:
+  prometheus-data:
 
 networks:
   default:

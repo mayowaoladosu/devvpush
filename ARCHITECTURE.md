@@ -9,6 +9,7 @@ This document describes the high‑level architecture of /dev/push, how the main
 - [Traefik](https://github.com/traefik/traefik)
 - [Loki](https://github.com/grafana/loki)
 - [Alloy](https://github.com/grafana/alloy)
+- [Prometheus](https://prometheus.io/)
 - [PostgreSQL](https://www.postgresql.org/)
 - [Redis](https://redis.io/)
 - [FastAPI](https://fastapi.tiangolo.com/)
@@ -22,6 +23,7 @@ This document describes the high‑level architecture of /dev/push, how the main
 - **App**: The app handles all of the user-facing logic (managing teams/projects, authenticating, searching logs...). It communicates with the workers via Redis.
 - **Workers**: Scheduling is serialized by project environment before an arq job is created. Webhook deliveries are idempotent and newest-commit-wins: older webhook jobs in `prepare` or `deploy` become skipped and are aborted/cleaned, while manual deploys are never superseded. Lifecycle tasks maintain a database heartbeat. The independent monitor compares stale leases with deterministic ARQ job state and directly recovers abandoned prepare/fail/finalize work. The finalizer promotes aliases under the same environment lock. Deployment lifecycle statuses: `prepare → deploy → finalize → completed` (with `conclusion`: succeeded/failed/canceled/skipped; `fail` is transient for failure handling).
 - **Logs**: build and runtime logs are streamed from Loki and served to the user via an SSE endpoint in the app.
+- **Metrics**: An internal exporter converts read-only Docker stats for labeled deployment containers into Prometheus metrics. The authenticated app queries Prometheus and renders project resource charts; neither backend is publicly routed.
 - **Runners**: Zero-config apps run inside language containers pulled from the registry catalog. Dockerfile apps are built into immutable per-deployment images and run their image-defined command.
 - **Dependency cache**: Official zero-config runners direct package-manager caches to `/cache`. DevPush mounts a host-backed generation isolated by project, environment, and runner image. Cache clears rotate generations atomically; background pruning removes only generations no longer mounted by current, rollback, or stopped containers.
 - **BuildKit**: Only the jobs worker can reach the rootless daemon over a group-restricted Unix socket. BuildKit has persistent layer cache, a private internal network, a read-only root filesystem, bounded resources, and no host Docker socket or control-plane network membership. Public dependency traffic crosses a separate filtered-egress proxy.
@@ -65,6 +67,8 @@ flowchart TB
     R[(Redis)]
     AL[Alloy]
     L[(Loki)]
+    MX[Metrics Exporter]
+    P[(Prometheus)]
   end
 
   subgraph Runtime
@@ -93,6 +97,9 @@ flowchart TB
   BK -- public HTTP/S only --> EP
   M -- Docker API --> DP
   DP -- create/manage --> RC
+  MX -- read-only stats --> DP
+  P -- scrape --> MX
+  A -- query metrics --> P
   RC -- logs --> AL
   AL -- ingest --> L
   A -- query logs --> L
@@ -158,6 +165,16 @@ Notes:
 
 - Centralized logs for deployments (build/runtime). Queried by the app for streaming.
 
+### Metrics Exporter
+
+- Lists only scoped Docker containers, keeps running deployment labels, and converts one-shot Docker stats into cumulative counters and gauges.
+- Runs non-root with a read-only filesystem, no host Docker socket, no public route, and bounded CPU, memory, PIDs, concurrency, and request timeouts.
+
+### Prometheus
+
+- Scrapes the exporter every five seconds and retains at most seven days or 2 GB by default.
+- Persists its TSDB in `prometheus-data`; only the authenticated app queries it for deployment charts.
+
 ## Deployment Flow
 
 1) Trigger
@@ -213,12 +230,14 @@ Notes:
 - `devpush_runner`: runner network for deployed containers; Traefik and workers attach to route/probe.
 - `${DEVPUSH_VOLUME_PREFIX}_buildkit`: internal BuildKit/build-step network with no default egress route. It is not shared with app, database, Redis, Docker proxy, or runners.
 - `${DEVPUSH_VOLUME_PREFIX}_buildkit-egress`: outbound network used only by the filtered proxy.
+- Prometheus and `metrics-exporter` join only `devpush_internal`; neither has a host port or Traefik route.
 
 ## Observability
 
 - Logs: runner containers -> Loki; app queries `Loki /loki/api/v1/query_range` and streams via SSE.
 - Durable diagnostics: workers/watchdog -> PostgreSQL; the app merges these events into deployment and project log views even when Loki is unavailable.
 - Recovery: active prepare/fail/finalize jobs heartbeat in PostgreSQL. The monitor confirms stale leases against ARQ state before failing or replaying lifecycle work.
+- Metrics: runner Docker stats -> internal exporter -> Prometheus -> authenticated project Monitoring dashboard.
 - Status: Redis Streams power SSE for project and deployment updates.
 - Health: app `/health`; ARQ `--check`; Docker Compose healthchecks for services.
 
@@ -231,6 +250,7 @@ Notes:
 - Source: Dockerfile archives are bounded and extracted with Python's data filter plus explicit path/size checks.
 - Build secrets: GitHub and project secrets are not exposed to Dockerfile instructions or persisted in build context/cache.
 - Egress: builds can fetch public dependencies but cannot connect directly or through the proxy to control-plane/private, host, or cloud-metadata ranges.
+- Metrics: the exporter has no Docker socket and receives only scoped container lists plus read-only one-shot stats from the policy proxy; Prometheus and exporter endpoints remain internal.
 
 ## Scaling
 

@@ -491,7 +491,7 @@ validate_env(){
 
 # Validation constants
 VALID_CERT_CHALLENGE_PROVIDERS="default|cloudflare|route53|gcloud|digitalocean|azure"
-VALID_COMPONENTS="app|worker-jobs|worker-monitor|alloy|traefik|loki|redis|docker-proxy|pgsql|buildkitd|buildkit-egress"
+VALID_COMPONENTS="app|worker-jobs|worker-monitor|metrics-exporter|prometheus|alloy|traefik|loki|redis|docker-proxy|pgsql|buildkitd|buildkit-egress"
 
 # Resolve certificate challenge provider from env
 get_cert_challenge_provider() {

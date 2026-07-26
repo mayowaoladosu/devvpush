@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     postgres_password: str = ""
     redis_url: str = "redis://redis:6379"
     docker_host: str = "tcp://docker-proxy:2375"
+    prometheus_url: str = "http://prometheus:9090"
+    prometheus_query_timeout_seconds: int = 8
     buildkit_host: str = "unix:///run/buildkit/buildkitd.sock"
     buildkit_proxy_url: str = "http://10.250.0.2:3128"
     data_dir: str = "/data"
@@ -201,6 +203,9 @@ def get_settings():
     )
     settings.deployment_reconcile_interval_seconds = max(
         1, settings.deployment_reconcile_interval_seconds
+    )
+    settings.prometheus_query_timeout_seconds = max(
+        1, settings.prometheus_query_timeout_seconds
     )
     settings.dockerfile_image_load_timeout_seconds = max(
         1, settings.dockerfile_image_load_timeout_seconds

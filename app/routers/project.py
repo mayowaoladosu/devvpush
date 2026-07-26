@@ -70,6 +70,7 @@ from services.github_installation import GitHubInstallationService
 from services.dependency_cache import DependencyCacheService
 from services.deployment_diagnostics import DeploymentDiagnosticService
 from services.deployment import DeploymentService
+from services.monitoring import PrometheusMonitoringService, WINDOWS
 from services.domain import DomainService
 from services.preset_detector import PresetDetector
 from services.registry import RegistryService
@@ -655,6 +656,108 @@ async def project_deployments(
             "pagination": pagination,
             "branches": branches,
             "env_aliases": env_aliases,
+            "latest_projects": latest_projects,
+            "latest_teams": latest_teams,
+        },
+    )
+
+
+@router.get(
+    "/{team_slug}/projects/{project_name}/monitoring",
+    name="project_monitoring",
+)
+async def project_monitoring(
+    request: Request,
+    deployment_id: str | None = Query(None),
+    time_range: str = Query("1h", alias="range"),
+    project: Project = Depends(get_project_by_name),
+    current_user: User = Depends(get_current_user),
+    role: str = Depends(get_role),
+    team_and_membership: tuple[Team, TeamMember] = Depends(get_team_by_slug),
+    settings: Settings = Depends(get_settings),
+    db: AsyncSession = Depends(get_db),
+):
+    team, membership = team_and_membership
+    result = await db.execute(
+        select(Deployment)
+        .where(
+            Deployment.project_id == project.id,
+            Deployment.container_id.isnot(None),
+        )
+        .order_by(Deployment.created_at.desc())
+        .limit(50)
+    )
+    deployments = list(result.scalars().all())
+    selected = next(
+        (deployment for deployment in deployments if deployment.id == deployment_id),
+        None,
+    )
+
+    if selected is None:
+        env_aliases = await project.get_environment_aliases(db=db)
+        production_alias = env_aliases.get("prod")
+        if production_alias:
+            selected = next(
+                (
+                    deployment
+                    for deployment in deployments
+                    if deployment.id == production_alias.deployment_id
+                ),
+                None,
+            )
+        selected = selected or next(
+            (
+                deployment
+                for deployment in deployments
+                if deployment.conclusion == "succeeded"
+                and deployment.container_status == "running"
+            ),
+            None,
+        )
+        selected = selected or (deployments[0] if deployments else None)
+
+    window = time_range if time_range in WINDOWS else "1h"
+    if selected:
+        monitoring = PrometheusMonitoringService(
+            settings.prometheus_url,
+            settings.prometheus_query_timeout_seconds,
+        )
+        try:
+            dashboard = await monitoring.dashboard(
+                project_id=project.id,
+                deployment_id=selected.id,
+                window_slug=window,
+            )
+        finally:
+            await monitoring.close()
+    else:
+        dashboard = {
+            "available": True,
+            "has_data": False,
+            "window": window,
+            "windows": list(WINDOWS.values()),
+            "current": {},
+            "charts": {},
+        }
+
+    latest_teams = await get_latest_teams(
+        db=db, current_user=current_user, current_team=team
+    )
+    latest_projects = await get_latest_projects(
+        db=db, team=team, current_project=project
+    )
+
+    return TemplateResponse(
+        request=request,
+        name="project/pages/monitoring.html",
+        context={
+            "current_user": current_user,
+            "role": role,
+            "team": team,
+            "project": project,
+            "deployments": deployments,
+            "selected_deployment": selected,
+            "dashboard": dashboard,
             "latest_projects": latest_projects,
             "latest_teams": latest_teams,
         },

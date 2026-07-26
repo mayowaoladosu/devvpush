@@ -16,6 +16,7 @@ An open-source and self-hostable alternative to Vercel, Render, Netlify and the 
 - **Fast redeploys**: Reuse isolated package-manager downloads across zero-config deployments and rotate caches without disrupting running releases.
 - **Environment management**: Multiple environments with branch mapping and encrypted environment variables.
 - **Real-time monitoring**: Live and searchable build and runtime logs.
+- **Resource monitoring**: Authenticated Prometheus-backed CPU, memory, network, disk I/O, and process dashboards per deployment.
 - **Durable failure diagnostics**: Database-backed worker heartbeats and watchdog recovery keep crashes, timeouts, queue loss, and Loki outages visible to users.
 - **Team collaboration**: Role-based access control with team invitations and permissions.
 - **Custom domains**: Support for custom domain and automatic Let's Encrypt SSL certificates.
@@ -128,6 +129,13 @@ failures with a structured code, source, attempt, hint, and timestamp. Small
 control-plane diagnostics are stored in PostgreSQL and merged into the existing
 logs UI, so useful failure context remains available when Loki is offline.
 
+Resource metrics use a separate internal-only exporter. It reads only labeled
+deployment containers through the restricted Docker proxy and publishes
+cumulative CPU, network, and block-I/O counters plus memory and process gauges.
+An internal Prometheus instance scrapes every five seconds with bounded time and
+size retention. Neither Prometheus nor the exporter exposes a host port; users
+query history through the authenticated project Monitoring page.
+
 **Key scripts**:
 
 - `./scripts/start.sh` / `stop.sh` / `restart.sh` — manage the full stack or selected components (`--components <csv>`)
@@ -193,6 +201,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for codebase structure.
 | `POSTGRES_USER`                     | Database user. Default: `devpush-app`.                                                                                                   |
 | `REDIS_URL`                         | Redis URL. Default: `redis://redis:6379`.                                                                                                |
 | `DOCKER_HOST`                       | Docker API. Default: `tcp://docker-proxy:2375`.                                                                                          |
+| `PROMETHEUS_QUERY_TIMEOUT_SECONDS`  | Maximum wait for an authenticated dashboard query. Default: `8`.                                                                        |
+| `PROMETHEUS_RETENTION_TIME`         | Prometheus duration for time-based retention (for example `168h` or `7d`). Default: `7d`.                                                |
+| `PROMETHEUS_RETENTION_SIZE`         | Prometheus byte-size retention ceiling (for example `512MB` or `2GB`). Default: `2GB`.                                                   |
+| `PROMETHEUS_MEMORY_LIMIT`           | Prometheus container memory limit. Default: `384m`.                                                                                      |
+| `PROMETHEUS_CPUS`                   | Prometheus container CPU limit. Default: `0.75`.                                                                                         |
 | `BUILDKIT_HOST`                     | Rootless BuildKit socket. Default: `unix:///run/buildkit/buildkitd.sock`.                                                               |
 | `BUILDKIT_INTERNAL_SUBNET`          | Private internal build network. Default: `10.250.0.0/24`.                                                                                |
 | `BUILDKIT_PROXY_IP`                 | Filtered-egress proxy address inside that subnet. Default: `10.250.0.2`.                                                                 |

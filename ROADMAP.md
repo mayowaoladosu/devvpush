@@ -2,7 +2,7 @@
 
 - [ ] **Database**: Allow users to create SQLite databases and make them available to projects/environments.
 - [ ] **Storage**: Persistent storage (volumes) per project/environment. Support 3rd party storage (S3, R2, Cloudinary).
-- [ ] **Monitoring**: Add Prometheus to track I/O, network, memory, CPU, etc. Add dashboard.
+- [x] **Monitoring**: Add Prometheus to track I/O, network, memory, CPU, etc. Add dashboard.
 
 ## Next
 

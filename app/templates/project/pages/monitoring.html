@@ -1,0 +1,137 @@
+{% extends "layouts/app.html" %}
+{% from "macros/avatar.html" import avatar with context %}
+{% from "project/macros/metric-chart.html" import metric_chart with context %}
+
+{% block app_content %}
+<div class="container max-w-screen-xl mx-auto p-8 space-y-6">
+  <header class="flex flex-wrap items-start justify-between gap-4">
+    <div class="space-y-1">
+      <h1 class="h1 flex items-center gap-x-3">
+        <a href="{{ url_for('project_index', team_slug=team.slug, project_name=project.name) }}" class="shrink-0">
+          {{ avatar(item=project, prefix="project", name=project.name, size="md") }}
+        </a>
+        <span class="text-muted-foreground/25 font-normal">/</span>
+        {{ _('Monitoring') }}
+      </h1>
+      <p class="text-sm text-muted-foreground">
+        {{ _('Prometheus-backed container resource history. Samples refresh every five seconds.') }}
+      </p>
+    </div>
+
+    <form method="get" class="flex flex-wrap items-center gap-2">
+      <select name="deployment_id" class="min-w-56" onchange="this.form.submit()">
+        {% for deployment in deployments %}
+          {% set environment = project.get_environment_by_id(deployment.environment_id) %}
+          <option value="{{ deployment.id }}" {% if selected_deployment and deployment.id == selected_deployment.id %}selected{% endif %}>
+            {{ deployment.id[:7] }} · {{ environment.name if environment else deployment.environment_id }} · {{ deployment.commit_sha[:7] }}
+          </option>
+        {% endfor %}
+      </select>
+      <select name="range" onchange="this.form.submit()">
+        {% for window in dashboard.windows %}
+          <option value="{{ window.slug }}" {% if dashboard.window == window.slug %}selected{% endif %}>{{ _(window.label) }}</option>
+        {% endfor %}
+      </select>
+    </form>
+  </header>
+
+  <div
+    id="monitoring-content"
+    class="space-y-6"
+    {% if selected_deployment %}
+      hx-get="{{ url_for('project_monitoring', team_slug=team.slug, project_name=project.name).include_query_params(deployment_id=selected_deployment.id, range=dashboard.window) }}"
+      hx-trigger="every 15s"
+      hx-select="#monitoring-content"
+      hx-target="#monitoring-content"
+      hx-swap="outerHTML"
+    {% endif %}
+  >
+    {% if not selected_deployment %}
+      <div class="card">
+        <section class="h-64 flex flex-col items-center justify-center gap-2 text-center">
+          <div class="text-muted-foreground [&>svg]:size-6">{% include "icons/hard-drive.svg" %}</div>
+          <h2 class="font-medium">{{ _('No deployment metrics yet') }}</h2>
+          <p class="text-sm text-muted-foreground max-w-md">
+            {{ _('Deploy this project to begin collecting CPU, memory, network, disk, and process metrics.') }}
+          </p>
+        </section>
+      </div>
+    {% else %}
+      {% set environment = project.get_environment_by_id(selected_deployment.environment_id) %}
+      <div class="flex flex-wrap items-center gap-2 text-sm">
+        <span class="badge-secondary font-mono">{{ selected_deployment.id[:7] }}</span>
+        <span class="badge-outline">{{ environment.name if environment else selected_deployment.environment_id }}</span>
+        <span class="badge-outline font-mono">{{ selected_deployment.commit_sha[:7] }}</span>
+        {% if selected_deployment.container_status %}
+          <span class="badge-outline">{{ selected_deployment.container_status | capitalize }}</span>
+        {% endif %}
+      </div>
+
+      {% if not dashboard.available %}
+        <div class="alert-destructive">
+          {% include "icons/triangle-alert.svg" %}
+          <section>
+            <h2>{{ _('Metrics backend unavailable') }}</h2>
+            <p>{{ _('Prometheus could not be queried. Deployment traffic is unaffected; metrics will resume automatically.') }}</p>
+          </section>
+        </div>
+      {% elif not dashboard.has_data %}
+        <div class="alert">
+          {% include "icons/info.svg" %}
+          <section>
+            {% if selected_deployment.container_status == 'running' %}
+              <h2>{{ _('Waiting for samples') }}</h2>
+              <p>{{ _('New containers need at least two Prometheus scrapes before rate charts appear.') }}</p>
+            {% else %}
+              <h2>{{ _('No retained samples') }}</h2>
+              <p>{{ _('This deployment has no metrics within the configured Prometheus retention window.') }}</p>
+            {% endif %}
+          </section>
+        </div>
+      {% endif %}
+
+      <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <div class="rounded-xl border p-4 space-y-1">
+          <p class="text-xs uppercase tracking-wide text-muted-foreground">{{ _('CPU') }}</p>
+          <p class="text-2xl font-semibold tabular-nums">{{ dashboard.current_display.cpu if dashboard.current_display else '0.0%' }}</p>
+          <p class="text-xs text-muted-foreground">{{ _('100% equals one CPU core') }}</p>
+        </div>
+        <div class="rounded-xl border p-4 space-y-1">
+          <p class="text-xs uppercase tracking-wide text-muted-foreground">{{ _('Memory') }}</p>
+          <p class="text-2xl font-semibold tabular-nums">{{ dashboard.current_display.memory if dashboard.current_display else '0 B' }}</p>
+          <p class="text-xs text-muted-foreground">
+            {% if dashboard.current and dashboard.current.memory_limit_bytes %}
+              {{ dashboard.current_display.memory_percent }} {{ _('of') }} {{ dashboard.current_display.memory_limit }}
+            {% else %}
+              {{ _('Working set') }}
+            {% endif %}
+          </p>
+        </div>
+        <div class="rounded-xl border p-4 space-y-1">
+          <p class="text-xs uppercase tracking-wide text-muted-foreground">{{ _('Network') }}</p>
+          <p class="text-2xl font-semibold tabular-nums">{{ dashboard.current_display.network if dashboard.current_display else '0 B/s' }}</p>
+          <p class="text-xs text-muted-foreground">{{ _('Receive + transmit') }}</p>
+        </div>
+        <div class="rounded-xl border p-4 space-y-1">
+          <p class="text-xs uppercase tracking-wide text-muted-foreground">{{ _('Disk I/O') }}</p>
+          <p class="text-2xl font-semibold tabular-nums">{{ dashboard.current_display.block if dashboard.current_display else '0 B/s' }}</p>
+          <p class="text-xs text-muted-foreground">{{ _('Read + write') }}</p>
+        </div>
+        <div class="rounded-xl border p-4 space-y-1">
+          <p class="text-xs uppercase tracking-wide text-muted-foreground">{{ _('Processes') }}</p>
+          <p class="text-2xl font-semibold tabular-nums">{{ dashboard.current_display.pids if dashboard.current_display else '0' }}</p>
+          <p class="text-xs text-muted-foreground">{{ _('Current PIDs') }}</p>
+        </div>
+      </div>
+
+      <div class="grid gap-6 xl:grid-cols-2">
+        {{ metric_chart(_('CPU usage'), _('Percentage of one CPU core.'), dashboard.charts.cpu) }}
+        {{ metric_chart(_('Memory working set'), _('Memory excluding inactive file cache.'), dashboard.charts.memory) }}
+        {{ metric_chart(_('Network throughput'), _('Bytes per second across all container interfaces.'), dashboard.charts.network) }}
+        {{ metric_chart(_('Block I/O throughput'), _('Read and write bytes per second.'), dashboard.charts.block) }}
+        {{ metric_chart(_('Process count'), _('Processes currently running inside the container.'), dashboard.charts.pids) }}
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

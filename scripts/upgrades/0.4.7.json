@@ -1,0 +1,4 @@
+{
+  "components": "app,metrics-exporter,prometheus,docker-proxy",
+  "reason": "Start the internal Prometheus metrics pipeline and enable read-only Docker stats"
+}

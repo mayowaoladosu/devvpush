@@ -162,6 +162,7 @@ These guidelines apply to every script under `scripts/` (install/start/stop/rest
 6. **Deployment scheduling**: Queue deployments only through `DeploymentService.schedule()`. Webhook scheduling is delivery-ID-idempotent and newest-commit-wins per project/environment; partial webhook failures must stay retryable, and manual deploys must never be auto-superseded. Worker checkpoints and finalizers must preserve existing terminal conclusions.
 7. **Dependency caches**: Keep zero-config package caches behind `DependencyCacheService`. Cache mounts must target only `/cache`, stay isolated by project/environment/runner/generation, and never be added to Dockerfile containers. Clearing rotates generations; pruning must preserve every generation still labeled on an existing container.
 8. **Deployment observability**: Wrap prepare/finalize/fail lifecycle tasks with `deployment_heartbeat()`, schedule finalization/failure through `DeploymentJobs`, and persist user-facing control-plane events through `DeploymentDiagnosticService`. The monitor must use short-lived database sessions and confirm stale leases against ARQ before recovery; elapsed build time alone must never fail a Dockerfile build.
+9. **Resource metrics**: Keep Docker stats collection in the internal `metrics-exporter` and PromQL/chart shaping behind `PrometheusMonitoringService`. Prometheus and the exporter must have no public ports or Traefik labels. Do not mount the host Docker socket into either service; add only read-only Docker proxy endpoints, export only labeled deployment containers, and bound retention/resources.
 
 ### Code Style
 
@@ -191,14 +192,15 @@ These guidelines apply to every script under `scripts/` (install/start/stop/rest
 
 4. **Volumes**:
    - Application data: `${DATA_DIR:-../data}` → `/var/lib/devpush`
-   - Named volumes: `devpush-db`, `loki-data`, `alloy-data` (for stateful services)
+   - Named volumes: `devpush-db`, `loki-data`, `alloy-data`, `prometheus-data` (for stateful services)
 
 ### Dockerfiles
 
 1. **Location**: `docker/` directory
 2. **App**: `Dockerfile.app` (prod) and `Dockerfile.app.dev` (dev). Both accept `APP_UID`/`APP_GID` build args (populated via `SERVICE_UID`/`SERVICE_GID`) so the container user matches the host service user.
-3. **Runners**: `docker/runner/Dockerfile.*` (one per language/runtime)
-4. **Entrypoints**: `entrypoint.*.sh` scripts for container initialization
+3. **Metrics exporter**: `Dockerfile.metrics` installs its locked dependencies at build time so the internal-only runtime never needs package-network access.
+4. **Runners**: `docker/runner/Dockerfile.*` (one per language/runtime)
+5. **Entrypoints**: `entrypoint.*.sh` scripts for container initialization
 
 ### Container Services
 
@@ -211,6 +213,8 @@ These guidelines apply to every script under `scripts/` (install/start/stop/rest
 7. **loki**: Log aggregation
 8. **alloy**: Telemetry agent (ships logs to Loki)
 9. **buildkitd**: Rootless Dockerfile builder reached only by `worker-jobs` over a Unix socket
+10. **metrics-exporter**: Internal read-only Docker stats exporter for labeled deployment containers
+11. **prometheus**: Internal bounded-retention resource metrics store queried only by the app
 
 Dockerfile builds must stay behind `services/dockerfile_builder.py`. Never call
 the host Docker `/build` endpoint, pass GitHub/project secrets as build args, or
