@@ -329,6 +329,7 @@ async def get_team_by_slug(
         .join(TeamMember)
         .where(
             Team.slug == team_slug,
+            Team.status != "deleted",
             TeamMember.user_id == current_user.id,
             TeamMember.role.in_(["owner", "admin", "member"]),
         )
@@ -352,6 +353,7 @@ async def get_team_by_id(
         .join(TeamMember)
         .where(
             Team.id == team_id,
+            Team.status != "deleted",
             TeamMember.user_id == current_user.id,
             TeamMember.role.in_(["owner", "admin", "member"]),
         )

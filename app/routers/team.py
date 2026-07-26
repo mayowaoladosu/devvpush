@@ -58,6 +58,12 @@ from forms.storage import (
     StorageProjectRemoveForm,
     StorageQueryForm,
 )
+from services.storage import (
+    StorageConfigurationError,
+    StorageSafetyError,
+    StorageService,
+)
+from services.storage_jobs import StorageJobs
 
 logger = logging.getLogger(__name__)
 
@@ -206,14 +212,23 @@ async def team_storage(
             db.add(storage)
             await db.commit()
             try:
-                await queue.enqueue_job("provision_storage", storage.id)
+                await StorageJobs.enqueue(
+                    queue,
+                    storage_id=storage.id,
+                    status=storage.status,
+                    updated_at=storage.updated_at,
+                )
             except Exception as exc:
                 logger.error(
                     "Failed to enqueue provisioning for storage %s: %s",
                     storage.id,
                     exc,
                 )
-            flash(request, _("Storage created."), "success")
+                await db.delete(storage)
+                await db.commit()
+                flash(request, _("Failed to queue storage provisioning."), "error")
+            else:
+                flash(request, _("Storage created."), "success")
 
             return RedirectResponseX(
                 request.url_for("team_storage", team_slug=team.slug),
@@ -324,6 +339,7 @@ async def team_storage_settings(
     team_and_membership: tuple[Team, TeamMember] = Depends(get_team_by_slug),
     storage: Storage = Depends(get_storage_by_name),
     queue: ArqRedis = Depends(get_queue),
+    settings: Settings = Depends(get_settings),
     db: AsyncSession = Depends(get_db),
 ):
     team, membership = team_and_membership
@@ -335,9 +351,11 @@ async def team_storage_settings(
 
     delete_form: Any = await StorageDeleteForm.from_formdata(request)
     reset_form: Any = await StorageResetForm.from_formdata(request)
+    storage_id = storage.id
 
     if request.method == "POST" and fragment == "danger":
         form_data = await request.form()
+        storage_service = StorageService(settings)
         if not get_access(role, "admin"):
             flash(
                 request,
@@ -346,39 +364,87 @@ async def team_storage_settings(
             )
         elif "reset_storage" in form_data and await reset_form.validate_on_submit():
             if storage.type in ("database", "volume"):
-                storage.status = "resetting"
-                storage.error = None
-                await db.commit()
+                reset_started = False
                 try:
-                    await queue.enqueue_job("reset_storage", storage.id)
+                    transitioned_storage = await storage_service.begin_reset(
+                        db, storage_id
+                    )
+                    reset_started = True
+                    await StorageJobs.enqueue(
+                        queue,
+                        storage_id=storage_id,
+                        status=transitioned_storage.status,
+                        updated_at=transitioned_storage.updated_at,
+                    )
+                except StorageSafetyError as exc:
+                    await db.rollback()
+                    flash(request, _(str(exc)), "error")
+                    return RedirectResponse(
+                        url=request.url.path,
+                        status_code=303,
+                    )
                 except Exception as exc:
                     logger.error(
-                        "Failed to enqueue reset for storage %s: %s",
-                        storage.id,
+                        "Failed to queue reset for storage %s: %s",
+                        storage_id,
                         exc,
                     )
-                    storage.status = "active"
-                    await db.commit()
+                    await db.rollback()
+                    if reset_started:
+                        await storage_service.restore_after_queue_failure(
+                            db,
+                            storage_id,
+                            status="active",
+                            stage="queue_reset",
+                            message="Storage reset could not be queued.",
+                        )
                     flash(request, _("Failed to reset storage."), "error")
                 else:
                     flash(request, _("Storage reset queued."), "success")
         elif "delete_storage" in form_data and await delete_form.validate_on_submit():
-            storage.status = "deleted"
-            await db.commit()
-            if storage.type in ("database", "volume"):
-                try:
-                    await queue.enqueue_job("deprovision_storage", storage.id)
-                except Exception as exc:
-                    logger.error(
-                        "Failed to enqueue deprovisioning for storage %s: %s",
-                        storage.id,
-                        exc,
+            delete_started = False
+            delete_previous_status = "active"
+            try:
+                deleted_storage, delete_previous_status = (
+                    await storage_service.begin_delete(db, storage_id)
+                )
+                storage = deleted_storage
+                delete_started = True
+                await StorageJobs.enqueue(
+                    queue,
+                    storage_id=storage_id,
+                    status=deleted_storage.status,
+                    updated_at=deleted_storage.updated_at,
+                )
+            except StorageSafetyError as exc:
+                await db.rollback()
+                flash(request, _(str(exc)), "error")
+                return RedirectResponse(
+                    url=request.url.path,
+                    status_code=303,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to queue deletion for storage %s: %s",
+                    storage_id,
+                    exc,
+                )
+                await db.rollback()
+                if delete_started:
+                    await storage_service.restore_after_queue_failure(
+                        db,
+                        storage_id,
+                        status=delete_previous_status,
+                        stage="queue_deprovision",
+                        message="Storage deletion could not be queued.",
                     )
-            flash(request, _("Storage deleted."), "success")
-            return RedirectResponse(
-                url=str(request.url_for("team_storage", team_slug=team.slug)),
-                status_code=303,
-            )
+                flash(request, _("Failed to delete storage."), "error")
+            else:
+                flash(request, _("Storage deletion queued."), "success")
+                return RedirectResponse(
+                    url=str(request.url_for("team_storage", team_slug=team.slug)),
+                    status_code=303,
+                )
 
     projects_query = (
         select(Project)
@@ -422,6 +488,28 @@ async def team_storage_settings(
     remove_association_form: Any = await StorageProjectRemoveForm.from_formdata(
         request, associations=associations
     )
+
+    def association_error_response(exc: StorageConfigurationError):
+        association_form.mount_path.errors.append(_(str(exc)))
+        if request.headers.get("HX-Request"):
+            return TemplateResponse(
+                request=request,
+                name="team/partials/_storage-settings-associations.html",
+                context={
+                    "current_user": current_user,
+                    "team": team,
+                    "role": role,
+                    "storage": storage,
+                    "projects": projects,
+                    "associations": associations,
+                    "association_form": association_form,
+                    "remove_association_form": remove_association_form,
+                    "available_projects": available_projects,
+                    "default_project": default_project,
+                },
+            )
+        flash(request, _(str(exc)), "error")
+        return RedirectResponse(url=str(request.url), status_code=303)
 
     if request.method == "GET" and fragment == "environment_select":
         project_id = request.query_params.get("project_id")
@@ -467,20 +555,53 @@ async def team_storage_settings(
             if association_id:
                 association = association_by_id.get(str(association_id))
                 if association:
-                    association.environment_ids = (
-                        association_form.environment_ids.data or []
-                    )
-                    flash(request, _("Association updated."), "success")
-                    await db.commit()
+                    try:
+                        mount_path = await StorageService(
+                            settings
+                        ).validate_attachment(
+                            db,
+                            project_id=association.project_id,
+                            storage=storage,
+                            mount_path=association_form.mount_path.data,
+                            environment_ids=association_form.environment_ids.data
+                            or [],
+                            association_id=association.id,
+                        )
+                    except StorageConfigurationError as exc:
+                        return association_error_response(exc)
+                    else:
+                        association.environment_ids = (
+                            association_form.environment_ids.data or []
+                        )
+                        association.mount_path = mount_path
+                        flash(request, _("Association updated."), "success")
+                        await db.commit()
                 else:
                     flash(request, _("Association not found."), "error")
                     await db.rollback()
+                    return RedirectResponse(url=request.url.path, status_code=303)
             elif association_form.association:
-                association_form.association.environment_ids = (
-                    association_form.environment_ids.data or []
-                )
-                flash(request, _("Association updated."), "success")
-                await db.commit()
+                association = association_form.association
+                try:
+                    mount_path = await StorageService(
+                        settings
+                    ).validate_attachment(
+                        db,
+                        project_id=association.project_id,
+                        storage=storage,
+                        mount_path=association_form.mount_path.data,
+                        environment_ids=association_form.environment_ids.data or [],
+                        association_id=association.id,
+                    )
+                except StorageConfigurationError as exc:
+                    return association_error_response(exc)
+                else:
+                    association.environment_ids = (
+                        association_form.environment_ids.data or []
+                    )
+                    association.mount_path = mount_path
+                    flash(request, _("Association updated."), "success")
+                    await db.commit()
             else:
                 existing_result = await db.execute(
                     select(StorageProject).where(
@@ -489,16 +610,35 @@ async def team_storage_settings(
                     )
                 )
                 existing_association = existing_result.scalar_one_or_none()
+                try:
+                    mount_path = await StorageService(
+                        settings
+                    ).validate_attachment(
+                        db,
+                        project_id=association_form.project_id.data,
+                        storage=storage,
+                        mount_path=association_form.mount_path.data,
+                        environment_ids=association_form.environment_ids.data or [],
+                        association_id=(
+                            existing_association.id
+                            if existing_association
+                            else None
+                        ),
+                    )
+                except StorageConfigurationError as exc:
+                    return association_error_response(exc)
                 if existing_association:
                     existing_association.environment_ids = (
                         association_form.environment_ids.data or []
                     )
+                    existing_association.mount_path = mount_path
                     flash(request, _("Association updated."), "success")
                 else:
                     association = StorageProject(
                         project_id=association_form.project_id.data,
                         storage_id=storage.id,
                         environment_ids=association_form.environment_ids.data or [],
+                        mount_path=mount_path,
                     )
                     db.add(association)
                     flash(request, _("Project linked to storage."), "success")
@@ -576,8 +716,14 @@ async def team_storage_settings(
             )
         elif await remove_association_form.validate_on_submit():
             association = remove_association_form.association
-            await db.delete(association)
-            await db.commit()
+            removed = await StorageService(settings).disconnect_attachment(
+                db,
+                project_id=association.project_id,
+                association_id=association.id,
+            )
+            if not removed:
+                flash(request, _("Association not found."), "error")
+                return RedirectResponse(url=str(request.url), status_code=303)
             associations_result = await db.execute(associations_query)
             associations = associations_result.scalars().all()
             available_projects = [
@@ -886,29 +1032,37 @@ async def team_settings(
         result = await db.execute(select(User).where(User.default_team_id == team.id))
         is_default_team = result.scalar_one_or_none()
         if not is_default_team:
+            team_id = team.id
+            team_name = team.name
             delete_team_form: Any = await TeamDeleteForm.from_formdata(
                 request, team=team
             )
             if request.method == "POST" and fragment == "danger":
                 if await delete_team_form.validate_on_submit():
                     try:
-                        delete_team_form.status = "deleted"
+                        team.status = "deleted"
                         await db.commit()
 
                         # Team is marked as deleted, actual cleanup is delegated to a job
-                        await queue.enqueue_job("delete_team", team.id)
+                        await queue.enqueue_job(
+                            "delete_team",
+                            team_id,
+                            _job_id=f"delete-team:{team_id}",
+                        )
 
                         flash(
                             request,
                             _('Team "%(name)s" has been marked for deletion.')
-                            % {"name": team.name},
+                            % {"name": team_name},
                             "success",
                         )
                         return RedirectResponse("/", status_code=303)
                     except Exception as e:
                         await db.rollback()
+                        team.status = "active"
+                        await db.commit()
                         logger.error(
-                            f'Error marking team "{team.name}" as deleted: {str(e)}'
+                            f'Error marking team "{team_name}" as deleted: {str(e)}'
                         )
                         flash(
                             request,

@@ -11,7 +11,7 @@ from sqlalchemy import exc, inspect, select
 
 from config import get_settings
 from db import AsyncSessionLocal
-from models import Deployment
+from models import Deployment, Storage
 from services.deployment import DeploymentService
 from services.deployment_diagnostics import DeploymentDiagnosticService
 from services.deployment_jobs import DeploymentJobs
@@ -19,6 +19,7 @@ from services.deployment_reconciler import (
     DeploymentReconciler,
     DeploymentRecoveryIncident,
 )
+from services.storage_jobs import StorageJobs
 from workers.tasks.deployment import fail_deployment, finalize_deployment
 
 logger = logging.getLogger(__name__)
@@ -251,6 +252,28 @@ async def _check_status_by_id(
             )
 
 
+async def _reconcile_storage_jobs(redis_pool: ArqRedis) -> None:
+    async with AsyncSessionLocal() as storage_db:
+        result = await storage_db.execute(
+            select(Storage.id, Storage.status, Storage.updated_at)
+            .where(
+                Storage.status.in_(["pending", "resetting", "deleted"]),
+                Storage.error.is_(None),
+            )
+            .order_by(Storage.updated_at.asc())
+            .limit(100)
+        )
+        transitions = result.all()
+
+    for storage_id, storage_status, updated_at in transitions:
+        await StorageJobs.enqueue(
+            redis_pool,
+            storage_id=storage_id,
+            status=storage_status,
+            updated_at=updated_at,
+        )
+
+
 # Cleanup function
 async def _cleanup_deployment(deployment_id: str):
     """Cleans up a deployment from the status dictionary."""
@@ -314,6 +337,7 @@ async def monitor():
                     await reconciler.run_once(
                         lambda incident: _recover_lifecycle_job(redis_pool, incident)
                     )
+                    await _reconcile_storage_jobs(redis_pool)
                     last_reconcile = now
 
             except exc.SQLAlchemyError as e:

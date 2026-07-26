@@ -708,6 +708,7 @@ class StorageProject(Base):
     storage_id: Mapped[str] = mapped_column(ForeignKey("storage.id"), index=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
     environment_ids: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    mount_path: Mapped[str] = mapped_column(String(255), nullable=False)
     secrets: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, default=dict
     )
@@ -727,6 +728,12 @@ class StorageProject(Base):
             name="uq_storage_project",
         ),
     )
+
+    @property
+    def application_path(self) -> str:
+        if self.storage and self.storage.type == "database":
+            return f"{self.mount_path}/db.sqlite"
+        return self.mount_path
 
 
 class Deployment(Base):

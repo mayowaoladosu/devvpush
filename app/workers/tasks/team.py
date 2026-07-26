@@ -28,25 +28,30 @@ async def delete_team(ctx, team_id: str):
             )
             projects = projects_result.scalars().all()
 
+            storages_result = await db.execute(
+                select(Storage).where(Storage.team_id == team_id)
+            )
+            storages = storages_result.scalars().all()
+
+            for project in projects:
+                project.status = "deleted"
+            for storage in storages:
+                storage.status = "deleted"
+            await db.commit()
+
             # Sequentially clean up each project
             for project in projects:
                 logger.info(
                     f"[DeleteTeam:{team_id}] Deleting project {project.id} ('{project.name}')"
                 )
-                project.status = "deleted"
-                await db.commit()
                 await delete_project(ctx, project.id)
 
             # Deprovision team storage
-            storage_ids_result = await db.execute(
-                select(Storage.id).where(Storage.team_id == team_id)
-            )
-            storage_ids = storage_ids_result.scalars().all()
-            for storage_id in storage_ids:
+            for storage in storages:
                 logger.info(
-                    f"[DeleteTeam:{team_id}] Deprovisioning storage {storage_id}"
+                    f"[DeleteTeam:{team_id}] Deprovisioning storage {storage.id}"
                 )
-                await deprovision_storage(ctx, storage_id)
+                await deprovision_storage(ctx, storage.id)
 
             # Delete related team data
             logger.info(

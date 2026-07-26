@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dependencies import get_translation as _, get_lazy_translation as _l
 from models import Project, Storage, StorageProject, Team
+from services.storage import StorageConfigurationError, StorageService
 
 
 def _parse_environment_ids(value):
@@ -55,7 +56,7 @@ class StorageCreateForm(StarletteForm):
             DataRequired(),
             Length(min=1, max=100),
             Regexp(
-                r"^[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9]$",
+                r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98}[A-Za-z0-9])?$",
                 message=_l(
                     "Storage names can only contain letters, numbers, hyphens, underscores and dots. They cannot start or end with a dot, underscore or hyphen."
                 ),
@@ -64,6 +65,9 @@ class StorageCreateForm(StarletteForm):
     )
     submit = SubmitField(_l("Create storage"))
     environment_ids = StringField(_l("Environments"), validators=[Optional()])
+    mount_path = StringField(
+        _l("Mount path"), validators=[Optional(), Length(max=255)]
+    )
 
     def __init__(
         self,
@@ -105,6 +109,12 @@ class StorageCreateForm(StarletteForm):
             if not self.project.get_environment_by_id(environment_id):
                 raise ValidationError(_("Environment not found."))
 
+    def validate_mount_path(self, field):
+        try:
+            field.data = StorageService.normalize_mount_path(field.data)
+        except StorageConfigurationError as exc:
+            raise ValidationError(_(str(exc))) from exc
+
 
 class StorageDeleteForm(StarletteForm):
     name = HiddenField(_l("Storage name"), validators=[DataRequired()])
@@ -131,6 +141,9 @@ class StorageProjectForm(StarletteForm):
     storage_id = HiddenField(_l("Storage"), validators=[DataRequired()])
     project_id = StringField(_l("Project"), validators=[DataRequired()])
     environment_ids = StringField(_l("Environments"), validators=[Optional()])
+    mount_path = StringField(
+        _l("Mount path"), validators=[Optional(), Length(max=255)]
+    )
 
     def __init__(
         self,
@@ -217,6 +230,12 @@ class StorageProjectForm(StarletteForm):
             raise ValidationError(
                 _("This project is already connected to this storage.")
             )
+
+    def validate_mount_path(self, field):
+        try:
+            field.data = StorageService.normalize_mount_path(field.data)
+        except StorageConfigurationError as exc:
+            raise ValidationError(_(str(exc))) from exc
 
 
 class StorageProjectRemoveForm(StarletteForm):

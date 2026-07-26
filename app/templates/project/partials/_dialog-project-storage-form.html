@@ -113,6 +113,20 @@
     {% endfor %}
   </div>
 
+  <div class="space-y-3">
+    {{ form.mount_path.label(class_="label") }}
+    {{ form.mount_path(
+      class_="input font-mono text-[13px]",
+      placeholder=_('Default: /data/type/name')
+    ) }}
+    <p class="text-muted-foreground text-sm">
+      {{ _('Optional absolute path inside the container, such as /app/data. Changes apply to future deployments.') }}
+    </p>
+    {% for error in form.mount_path.errors %}
+      <p class="text-destructive text-sm">{{ error }}</p>
+    {% endfor %}
+  </div>
+
   <footer class="flex justify-end gap-x-2">
     <button type="button" class="btn-ghost" onclick="this.closest('dialog').close()">{{ _('Cancel') }}</button>
     <button type="submit" class="btn">

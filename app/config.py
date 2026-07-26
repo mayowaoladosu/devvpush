@@ -55,7 +55,6 @@ class Settings(BaseSettings):
     max_cpus: float | None = None
     default_memory_mb: int | None = None
     max_memory_mb: int | None = None
-    default_db_size_limit_bytes: int | None = 5 * 1024 * 1024 * 1024
     presets: list[dict] = []
     runners: list[dict] = []
     job_timeout_seconds: int = 320

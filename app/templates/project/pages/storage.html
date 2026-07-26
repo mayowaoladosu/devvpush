@@ -73,23 +73,23 @@
               {% endif %}
             </div>
 
+            <div
+              class="text-muted-foreground font-mono text-xs truncate"
+              data-tooltip="{{ _('Application path') }}"
+              aria-label="{{ _('Application path') }}"
+            >
+              {{ association.application_path }}
+            </div>
+
             {% set storage = association.storage %}
             {% include "project/partials/_storage-status.html" %}
 
             <div class="flex items-center ml-auto">
-              {% if storage.type == "volume" %}
-                {{ copy(
-                  value="/data/volume/" ~ storage.name,
-                  attrs={"tooltip": _('Copy volume path')},
-                  class="btn-sm-icon-ghost"
-                ) }}
-              {% else %}
-                {{ copy(
-                  value="/data/database/" ~ storage.name ~ "/db.sqlite",
-                  attrs={"tooltip": _('Copy database path')},
-                  class="btn-sm-icon-ghost"
-                ) }}
-              {% endif %}
+              {{ copy(
+                value=association.application_path,
+                attrs={"tooltip": _('Copy application path')},
+                class="btn-sm-icon-ghost"
+              ) }}
 
               {% if get_access(role, "admin") or association.storage.created_by_user_id == current_user.id %}
                 {% set icon_unplug %}{% include "icons/unplug.svg" %}{% endset %}
@@ -105,7 +105,7 @@
                   items=[
                     {
                       "icon": icon_edit,
-                      "label": _("Environments"),
+                      "label": _("Connection settings"),
                       "attrs": {
                         "onclick": "document.getElementById('dialog-storage-environments-" ~ association.id ~ "').showModal()"
                       },
@@ -134,8 +134,8 @@
             {% if get_access(role, "admin") or association.storage.created_by_user_id == current_user.id %}
               {% call dialog(
                 id="dialog-storage-environments-" ~ association.id,
-                title=_('Edit environments', storage=association.storage.name),
-                description=_('Select the environments that will have access to this storage.', project=project.name),
+                title=_('Edit storage connection', storage=association.storage.name),
+                description=_('Choose environments and the path used by future deployments.', project=project.name),
                 dialog_attrs={"class": "max-w-lg"}
               ) %}
                 {% include "project/partials/_dialog-project-storage-environments-form.html" with context %}

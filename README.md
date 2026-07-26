@@ -14,6 +14,7 @@ An open-source and self-hostable alternative to Vercel, Render, Netlify and the 
 - **Multi-language support**: Python, Node.js, PHP... basically anything that can run on Docker.
 - **Native Dockerfiles**: Build repository Dockerfiles with cached, rootless BuildKit and run the resulting image command.
 - **Fast redeploys**: Reuse isolated package-manager downloads across zero-config deployments and rotate caches without disrupting running releases.
+- **Persistent data**: Attach environment-scoped SQLite databases and local volumes at validated application paths that survive deploys and rollbacks.
 - **Environment management**: Multiple environments with branch mapping and encrypted environment variables.
 - **Real-time monitoring**: Live and searchable build and runtime logs.
 - **Resource monitoring**: Authenticated Prometheus-backed CPU, memory, network, disk I/O, and process dashboards per deployment.
@@ -135,6 +136,19 @@ cumulative CPU, network, and block-I/O counters plus memory and process gauges.
 An internal Prometheus instance scrapes every five seconds with bounded time and
 size retention. Neither Prometheus nor the exporter exposes a host port; users
 query history through the authenticated project Monitoring page.
+
+Persistent storage is owned by a team and connected to projects for all or
+selected environments. Connections may use the generated `/data/...` path or a
+validated custom container directory such as `/app/data`. The same host-backed
+resource is attached to zero-config and Dockerfile releases, so data remains
+available across redeploys and rollback containers. Mount paths cannot overlap
+within an environment, cannot target system/platform directories, and never
+accept arbitrary host paths. Reset and deletion fail closed while any current,
+rollback, stopped, or otherwise retained deployment container still references
+the resource. Lifecycle transitions use deterministic jobs, and the independent
+monitor recovers state committed immediately before an enqueue/process crash.
+Local storage capacity is managed by the host filesystem; use
+operator disk quotas where hard tenant limits are required.
 
 **Key scripts**:
 

@@ -51,6 +51,22 @@
     {% endfor %}
   </div>
 
+  <div class="space-y-3">
+    {{ edit_storage_form.mount_path.label(class_="label") }}
+    {{ edit_storage_form.mount_path(
+      id=False,
+      class_="input font-mono text-[13px]",
+      value=association.mount_path,
+      placeholder=_('Default: /data/type/name')
+    ) }}
+    <p class="text-muted-foreground text-sm">
+      {{ _('Absolute path inside future deployment containers.') }}
+    </p>
+    {% for error in edit_storage_form.mount_path.errors %}
+      <p class="text-destructive text-sm">{{ error }}</p>
+    {% endfor %}
+  </div>
+
   <footer class="flex justify-end gap-x-2">
     <button type="button" class="btn-ghost" onclick="this.closest('dialog').close()">{{ _('Cancel') }}</button>
     <button type="submit" class="btn group">

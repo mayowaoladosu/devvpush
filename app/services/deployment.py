@@ -12,11 +12,12 @@ from redis.asyncio import Redis
 from arq.connections import ArqRedis
 from arq.jobs import Job, JobStatus
 
-from models import Deployment, Alias, Project, User, Domain, Storage, StorageProject
+from models import Deployment, Alias, Project, User, Domain
 from utils.environment import get_environment_for_branch
 from config import Settings, get_settings
 from services.registry import RegistryService
 from services.deployment_diagnostics import DeploymentDiagnosticService
+from services.storage import RuntimeStorage, StorageService
 
 logger = logging.getLogger(__name__)
 
@@ -248,27 +249,22 @@ class DeploymentService:
         self, deployment: Deployment, db: AsyncSession, settings: Settings
     ) -> list[str]:
         """Build container bind mounts for storage resources."""
-        result = await db.execute(
-            select(StorageProject, Storage)
-            .join(Storage, StorageProject.storage_id == Storage.id)
-            .where(
-                StorageProject.project_id == deployment.project_id,
-                Storage.status.notin_(["pending", "deleted"]),
-                Storage.type.in_(["database", "volume"]),
-            )
+        runtime = await self.get_runtime_storage(deployment, db, settings)
+        return runtime.binds
+
+    async def get_runtime_storage(
+        self,
+        deployment: Deployment,
+        db: AsyncSession,
+        settings: Settings,
+        *,
+        lock: bool = False,
+    ) -> RuntimeStorage:
+        return await StorageService(settings).runtime(
+            deployment,
+            db,
+            lock=lock,
         )
-        mounts: list[str] = []
-        for association, storage in result.all():
-            env_ids = association.environment_ids or []
-            if env_ids and deployment.environment_id not in env_ids:
-                continue
-            host_base = settings.host_data_dir or settings.data_dir
-            host_path = os.path.join(
-                host_base, "storage", storage.team_id, storage.type, storage.name
-            )
-            container_path = f"/data/{storage.type}/{storage.name}"
-            mounts.append(f"{host_path}:{container_path}")
-        return mounts
 
     async def setup_aliases(
         self, deployment: Deployment, db: AsyncSession, settings: Settings

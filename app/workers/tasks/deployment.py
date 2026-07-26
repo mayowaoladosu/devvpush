@@ -229,9 +229,8 @@ async def start_deployment(ctx, deployment_id: str):
                 env_vars_dict = DeploymentService().get_runtime_env_vars(
                     deployment, settings
                 )
-                mounts = await DeploymentService().get_runtime_mounts(
-                    deployment, db, settings
-                )
+                mounts: list[str] = []
+                storage_ids: list[str] = []
                 config = deployment.config or {}
                 uses_dockerfile = DeploymentService.uses_dockerfile(config)
                 registry_state = RegistryService(
@@ -498,6 +497,23 @@ async def start_deployment(ctx, deployment_id: str):
                     else:
                         raise
 
+                runtime_storage = await DeploymentService().get_runtime_storage(
+                    deployment,
+                    db,
+                    settings,
+                    lock=True,
+                )
+                mounts.extend(runtime_storage.binds)
+                storage_ids = runtime_storage.storage_ids
+                if storage_ids:
+                    labels["devpush.storage_ids"] = ",".join(storage_ids)
+                    await _push_loki_log(
+                        loki,
+                        deployment,
+                        "Attaching %s persistent storage resource(s)"
+                        % len(storage_ids),
+                    )
+
                 await _push_loki_log(
                     loki,
                     deployment,
@@ -528,6 +544,11 @@ async def start_deployment(ctx, deployment_id: str):
                                 else {}
                             ),
                             **({"Binds": mounts} if mounts else {}),
+                            **(
+                                {"GroupAdd": [str(settings.service_gid)]}
+                                if storage_ids
+                                else {}
+                            ),
                             "CapDrop": ["ALL"],
                             **(
                                 {

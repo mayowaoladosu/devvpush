@@ -6,13 +6,21 @@
 
 {% macro render_association_form(association={}, index=0, update=False) %}
   {% if association %}
+    {% set is_active = association_form.errors and association_form.association_id.data == association.id %}
+  {% else %}
+    {% set is_active = association_form.errors and not association_form.association_id.data %}
+  {% endif %}
+
+  {% if association %}
     {% set selected_project = association.project %}
     {% set selected_project_id = association.project_id %}
-    {% set selected_environment_ids = association.environment_ids %}
+    {% set selected_environment_ids = association_form.environment_ids.data if is_active else association.environment_ids %}
+    {% set selected_mount_path = association_form.mount_path.data if is_active else association.mount_path %}
   {% elif association_form.project_id.data %}
     {% set selected_project_id = association_form.project_id.data %}
     {% set selected_project = none %}
     {% set selected_environment_ids = association_form.environment_ids.data %}
+    {% set selected_mount_path = association_form.mount_path.data %}
     {% for project in projects %}
       {% if project.id == selected_project_id %}
         {% set selected_project = project %}
@@ -22,14 +30,9 @@
     {% set selected_project = default_project %}
     {% set selected_project_id = default_project.id if default_project else "" %}
     {% set selected_environment_ids = association_form.environment_ids.data %}
+    {% set selected_mount_path = association_form.mount_path.data %}
   {% endif %}
 
-  {% if association %}
-    {% set is_active = association_form.errors and association_form.association_id.data == association.id %}
-  {% else %}
-    {% set is_active = association_form.errors and not association_form.association_id.data %}
-  {% endif %}
-  
   <form
     method="post"
     action="{{ url_for('team_storage_settings', team_slug=team.slug, storage_name=storage.name).include_query_params(fragment='association') }}"
@@ -106,6 +109,20 @@
     <div class="flex-1 space-y-2 min-w-0" data-environments>
       {% include "team/partials/_storage-select-environments.html" with context %}
     </div>
+
+    <div class="flex-1 space-y-2 min-w-0">
+      {{ association_form.mount_path(
+        id=False,
+        class_="input w-full font-mono text-[13px]",
+        value=selected_mount_path or "",
+        placeholder=_('Default: /data/type/name')
+      ) }}
+      {% if is_active %}
+        {% for error in association_form.mount_path.errors %}
+          <p class="text-destructive text-sm">{{ error }}</p>
+        {% endfor %}
+      {% endif %}
+    </div>
     
     <div class="w-20 shrink-0 flex items-center justify-center">
       <button class="btn-icon-ghost" type="submit" aria-label="{{ _('Save') }}" data-tooltip="{{ _('Save') }}">
@@ -136,6 +153,7 @@
         <div class="flex gap-x-2 border-b border-border/50 pb-2" x-show="activeForm !== null || {{ associations | length }} > 0">
           <div class="flex-1 label">{{ _('Project') }}</div>
           <div class="flex-1 label">{{ _('Environments') }}</div>
+          <div class="flex-1 label">{{ _('Mount path') }}</div>
           <div class="shrink-0 w-20"></div>
         </div>
         {% for association in associations %}
@@ -161,12 +179,15 @@
                   {% endif %}
                 </span>
               </div>
+              <div class="flex-1 min-w-0 truncate font-mono text-xs text-muted-foreground">
+                {{ association.application_path }}
+              </div>
               <div class="flex items-center w-20">
                 <button
                   type="button"
                   class="btn-icon-ghost"
-                  aria-label="{{ _('Edit environments') }}"
-                  data-tooltip="{{ _('Edit environments') }}"
+                  aria-label="{{ _('Edit connection') }}"
+                  data-tooltip="{{ _('Edit connection') }}"
                   @click="activeForm = {{ loop.index }}"
                   :disabled="activeForm"
                 >

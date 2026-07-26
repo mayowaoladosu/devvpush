@@ -1,0 +1,4 @@
+{
+  "components": "app,worker-jobs,worker-monitor",
+  "reason": "Apply persistent storage mount paths and lifecycle safety"
+}

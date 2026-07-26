@@ -71,6 +71,8 @@ from services.dependency_cache import DependencyCacheService
 from services.deployment_diagnostics import DeploymentDiagnosticService
 from services.deployment import DeploymentService
 from services.monitoring import PrometheusMonitoringService, WINDOWS
+from services.storage import StorageConfigurationError, StorageService
+from services.storage_jobs import StorageJobs
 from services.domain import DomainService
 from services.preset_detector import PresetDetector
 from services.registry import RegistryService
@@ -870,22 +872,40 @@ async def project_storage(
                 )
                 db.add(storage)
                 await db.flush()
+                mount_path = await StorageService(settings).validate_attachment(
+                    db,
+                    project_id=project.id,
+                    storage=storage,
+                    mount_path=create_storage_form.mount_path.data,
+                    environment_ids=create_storage_form.environment_ids.data or [],
+                )
                 association = StorageProject(
                     project_id=project.id,
                     storage_id=storage.id,
                     environment_ids=create_storage_form.environment_ids.data or [],
+                    mount_path=mount_path,
                 )
                 db.add(association)
                 await db.commit()
                 try:
-                    await queue.enqueue_job("provision_storage", storage.id)
+                    await StorageJobs.enqueue(
+                        queue,
+                        storage_id=storage.id,
+                        status=storage.status,
+                        updated_at=storage.updated_at,
+                    )
                 except Exception as exc:
                     logger.error(
                         "Failed to enqueue provisioning for storage %s: %s",
                         storage.id,
                         exc,
                     )
-                flash(request, _("Storage created and connected."), "success")
+                    await db.delete(association)
+                    await db.delete(storage)
+                    await db.commit()
+                    flash(request, _("Failed to queue storage provisioning."), "error")
+                else:
+                    flash(request, _("Storage created and connected."), "success")
                 return RedirectResponseX(
                     url=str(
                         request.url_for(
@@ -896,8 +916,15 @@ async def project_storage(
                     ),
                     request=request,
                 )
+            except StorageConfigurationError as exc:
+                await db.rollback()
+                await db.refresh(project)
+                await db.refresh(team)
+                create_storage_form.mount_path.errors.append(_(str(exc)))
             except Exception as e:
                 await db.rollback()
+                await db.refresh(project)
+                await db.refresh(team)
                 logger.error(
                     f"Error creating storage for project {project_name}: {str(e)}"
                 )
@@ -929,16 +956,38 @@ async def project_storage(
                     )
                 )
                 existing_association = existing_result.scalar_one_or_none()
+                selected_storage = next(
+                    (
+                        storage
+                        for storage in available_storages
+                        if storage.id == connect_storage_form.storage_id.data
+                    ),
+                    None,
+                )
+                if not selected_storage:
+                    raise StorageConfigurationError("Storage not found.")
+                mount_path = await StorageService(settings).validate_attachment(
+                    db,
+                    project_id=project.id,
+                    storage=selected_storage,
+                    mount_path=connect_storage_form.mount_path.data,
+                    environment_ids=connect_storage_form.environment_ids.data or [],
+                    association_id=(
+                        existing_association.id if existing_association else None
+                    ),
+                )
                 if existing_association:
                     existing_association.environment_ids = (
                         connect_storage_form.environment_ids.data or []
                     )
+                    existing_association.mount_path = mount_path
                     flash(request, _("Storage connection updated."), "success")
                 else:
                     association = StorageProject(
                         project_id=project.id,
                         storage_id=connect_storage_form.storage_id.data,
                         environment_ids=connect_storage_form.environment_ids.data or [],
+                        mount_path=mount_path,
                     )
                     db.add(association)
                     flash(request, _("Storage connected."), "success")
@@ -953,8 +1002,14 @@ async def project_storage(
                     ),
                     request=request,
                 )
+            except StorageConfigurationError as exc:
+                connect_storage_form.mount_path.errors.append(_(str(exc)))
             except Exception as e:
                 await db.rollback()
+                await db.refresh(project)
+                await db.refresh(team)
+                for available_storage in available_storages:
+                    await db.refresh(available_storage)
                 logger.error(
                     f"Error connecting storage for project {project_name}: {str(e)}"
                 )
@@ -986,21 +1041,35 @@ async def project_storage(
             if not association:
                 flash(request, _("Association not found."), "error")
             else:
-                association.environment_ids = (
-                    edit_storage_form.environment_ids.data or []
-                )
-                await db.commit()
-                flash(request, _("Storage connection updated."), "success")
-                return RedirectResponseX(
-                    url=str(
-                        request.url_for(
-                            "project_storage",
-                            team_slug=team.slug,
-                            project_name=project.name,
-                        )
-                    ),
-                    request=request,
-                )
+                try:
+                    mount_path = await StorageService(
+                        settings
+                    ).validate_attachment(
+                        db,
+                        project_id=project.id,
+                        storage=association.storage,
+                        mount_path=edit_storage_form.mount_path.data,
+                        environment_ids=edit_storage_form.environment_ids.data or [],
+                        association_id=association.id,
+                    )
+                    association.environment_ids = (
+                        edit_storage_form.environment_ids.data or []
+                    )
+                    association.mount_path = mount_path
+                    await db.commit()
+                    flash(request, _("Storage connection updated."), "success")
+                    return RedirectResponseX(
+                        url=str(
+                            request.url_for(
+                                "project_storage",
+                                team_slug=team.slug,
+                                project_name=project.name,
+                            )
+                        ),
+                        request=request,
+                    )
+                except StorageConfigurationError as exc:
+                    edit_storage_form.mount_path.errors.append(_(str(exc)))
         if request.headers.get("HX-Request"):
             association = None
             association_id = edit_storage_form.association_id.data
@@ -1027,9 +1096,16 @@ async def project_storage(
     if request.method == "POST" and fragment == "disconnect_storage":
         if await remove_storage_form.validate_on_submit():
             association = remove_storage_form.association
-            await db.delete(association)
-            await db.commit()
-            flash(request, _("Storage disconnected."), "success")
+            removed = await StorageService(settings).disconnect_attachment(
+                db,
+                project_id=project.id,
+                association_id=association.id,
+            )
+            flash(
+                request,
+                _("Storage disconnected.") if removed else _("Association not found."),
+                "success" if removed else "error",
+            )
             return RedirectResponseX(
                 url=str(
                     request.url_for(

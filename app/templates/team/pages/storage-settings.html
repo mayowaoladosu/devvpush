@@ -44,10 +44,10 @@
         <section>
           {% if storage.type == "database" %}
             {% set storage_path = "/data/database/" ~ storage.name ~ "/db.sqlite" %}
-            {% set storage_description = _('You can access this SQLite database in any of the selected environments at:') %}
+            {% set storage_description = _('Default SQLite path. Each project connection can override its mount directory:') %}
           {% else %}
             {% set storage_path = "/data/volume/" ~ storage.name ~ "/" %}
-            {% set storage_description = _('You can access this volume in any of the selected environments at:') %}
+            {% set storage_description = _('Default volume path. Each project connection can override it:') %}
           {% endif %}
           <p >{{ storage_description }}</p>
           <div class="relative w-full mt-1">
