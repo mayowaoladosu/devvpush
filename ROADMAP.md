@@ -2,7 +2,8 @@
 
 - [x] **Database**: Allow users to create SQLite databases and make them available to projects/environments.
 - [x] **Persistent storage**: Environment-scoped local volumes and SQLite databases with configurable container paths, redeploy/rollback persistence, and mounted-container deletion safety.
-- [ ] **Object storage**: Support third-party storage providers such as S3, R2, and Cloudinary.
+- [x] **Object storage**: Encrypted AWS S3, Cloudflare R2, and generic S3-compatible connections with runtime-only credentials and bucket verification.
+- [ ] **Media providers**: Add a dedicated Cloudinary integration (not S3-compatible).
 - [x] **Monitoring**: Add Prometheus to track I/O, network, memory, CPU, etc. Add dashboard.
 
 ## Next

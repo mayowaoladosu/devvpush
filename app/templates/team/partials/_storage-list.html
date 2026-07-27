@@ -34,12 +34,16 @@
               attrs={"tooltip": _('Copy volume path')},
               class="btn-sm-icon-ghost"
             ) }}
-          {% else %}
+          {% elif storage.type == "database" %}
             {{ copy(
               value="/data/database/" ~ storage.name ~ "/db.sqlite",
               attrs={"tooltip": _('Copy database path')},
               class="btn-sm-icon-ghost"
             ) }}
+          {% elif storage.type == "object" %}
+            <span class="badge-outline font-mono text-xs">
+              {{ storage.config.get('bucket') }}
+            </span>
           {% endif %}
           {% if get_access(role, "creator") %}
             <a

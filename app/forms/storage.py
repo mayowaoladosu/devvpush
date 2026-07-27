@@ -8,13 +8,19 @@ from wtforms import (
     SelectField,
     TextAreaField,
     BooleanField,
+    PasswordField,
 )
 from wtforms.validators import DataRequired, Length, Regexp, ValidationError, Optional
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dependencies import get_translation as _, get_lazy_translation as _l
+from config import get_settings
 from models import Project, Storage, StorageProject, Team
+from services.object_storage import (
+    ObjectStorageConfigurationError,
+    ObjectStorageService,
+)
 from services.storage import StorageConfigurationError, StorageService
 
 
@@ -48,6 +54,7 @@ class StorageCreateForm(StarletteForm):
         choices=[
             ("database", _("Database")),
             ("volume", _("Volume")),
+            ("object", _("Object storage")),
         ],
     )
     name = StringField(
@@ -68,6 +75,36 @@ class StorageCreateForm(StarletteForm):
     mount_path = StringField(
         _l("Mount path"), validators=[Optional(), Length(max=255)]
     )
+    provider = SelectField(
+        _l("Provider"),
+        choices=[
+            ("aws", _("AWS S3")),
+            ("r2", _("Cloudflare R2")),
+            ("custom", _("S3-compatible")),
+        ],
+        validators=[Optional()],
+    )
+    bucket = StringField(_l("Bucket"), validators=[Optional(), Length(max=63)])
+    region = StringField(_l("Region"), validators=[Optional(), Length(max=63)])
+    account_id = StringField(
+        _l("Cloudflare account ID"), validators=[Optional(), Length(max=32)]
+    )
+    endpoint_url = StringField(
+        _l("Endpoint URL"), validators=[Optional(), Length(max=2048)]
+    )
+    public_url = StringField(
+        _l("Public URL"), validators=[Optional(), Length(max=2048)]
+    )
+    access_key_id = StringField(
+        _l("Access key ID"), validators=[Optional(), Length(max=128)]
+    )
+    secret_access_key = PasswordField(
+        _l("Secret access key"), validators=[Optional(), Length(max=256)]
+    )
+    session_token = PasswordField(
+        _l("Session token"), validators=[Optional(), Length(max=4096)]
+    )
+    path_style = BooleanField(_l("Use path-style URLs"), default=False)
 
     def __init__(
         self,
@@ -110,10 +147,43 @@ class StorageCreateForm(StarletteForm):
                 raise ValidationError(_("Environment not found."))
 
     def validate_mount_path(self, field):
+        if self.type.data == "object":
+            field.data = None
+            return
         try:
             field.data = StorageService.normalize_mount_path(field.data)
         except StorageConfigurationError as exc:
             raise ValidationError(_(str(exc))) from exc
+
+    def validate_secret_access_key(self, field):
+        if self.type.data != "object":
+            return
+        try:
+            self.object_values()
+        except ObjectStorageConfigurationError as exc:
+            raise ValidationError(_(str(exc))) from exc
+
+    def object_values(self):
+        settings = get_settings()
+        config = ObjectStorageService.build_config(
+            provider=self.provider.data,
+            bucket=self.bucket.data,
+            region=self.region.data,
+            account_id=self.account_id.data,
+            endpoint_url=self.endpoint_url.data,
+            public_url=self.public_url.data,
+            path_style=bool(self.path_style.data),
+            allow_insecure=(
+                settings.env == "development"
+                or settings.object_storage_allow_insecure_endpoints
+            ),
+        )
+        credentials = ObjectStorageService.build_credentials(
+            access_key_id=self.access_key_id.data,
+            secret_access_key=self.secret_access_key.data,
+            session_token=self.session_token.data,
+        )
+        return config, credentials
 
 
 class StorageDeleteForm(StarletteForm):
@@ -166,7 +236,7 @@ class StorageProjectForm(StarletteForm):
             str(association.id): association for association in associations
         }
         self._selected_project = None
-        self._selected_storage = None
+        self._selected_storage = storage
         self.association = None
         if self.environment_ids.data in (None, ""):
             self.environment_ids.data = []
@@ -232,6 +302,9 @@ class StorageProjectForm(StarletteForm):
             )
 
     def validate_mount_path(self, field):
+        if self._selected_storage and self._selected_storage.type == "object":
+            field.data = None
+            return
         try:
             field.data = StorageService.normalize_mount_path(field.data)
         except StorageConfigurationError as exc:
@@ -264,6 +337,85 @@ class StorageProjectRemoveForm(StarletteForm):
         project_name = self.association.project.name if self.association.project else ""
         if field.data != project_name:
             raise ValidationError(_("Project name confirmation did not match."))
+
+
+class ObjectStorageConnectionForm(StarletteForm):
+    provider = SelectField(
+        _l("Provider"),
+        choices=[
+            ("aws", _("AWS S3")),
+            ("r2", _("Cloudflare R2")),
+            ("custom", _("S3-compatible")),
+        ],
+    )
+    bucket = StringField(
+        _l("Bucket"), validators=[DataRequired(), Length(max=63)]
+    )
+    region = StringField(_l("Region"), validators=[Optional(), Length(max=63)])
+    account_id = StringField(
+        _l("Cloudflare account ID"), validators=[Optional(), Length(max=32)]
+    )
+    endpoint_url = StringField(
+        _l("Endpoint URL"), validators=[Optional(), Length(max=2048)]
+    )
+    public_url = StringField(
+        _l("Public URL"), validators=[Optional(), Length(max=2048)]
+    )
+    path_style = BooleanField(_l("Use path-style URLs"), default=False)
+    access_key_id = StringField(
+        _l("Access key ID"), validators=[Optional(), Length(max=128)]
+    )
+    secret_access_key = PasswordField(
+        _l("Secret access key"), validators=[Optional(), Length(max=256)]
+    )
+    session_token = PasswordField(
+        _l("Session token"), validators=[Optional(), Length(max=4096)]
+    )
+    clear_session_token = BooleanField(_l("Remove the stored session token"))
+    submit = SubmitField(_l("Verify and save"))
+
+    def __init__(self, request: Request, *args, storage: Storage, **kwargs):
+        super().__init__(request, *args, **kwargs)
+        self.storage = storage
+
+    def validate_secret_access_key(self, field):
+        try:
+            self.values()
+        except ObjectStorageConfigurationError as exc:
+            raise ValidationError(_(str(exc))) from exc
+
+    def values(self):
+        settings = get_settings()
+        config = ObjectStorageService.build_config(
+            provider=self.provider.data,
+            bucket=self.bucket.data,
+            region=self.region.data,
+            account_id=self.account_id.data,
+            endpoint_url=self.endpoint_url.data,
+            public_url=self.public_url.data,
+            path_style=bool(self.path_style.data),
+            allow_insecure=(
+                settings.env == "development"
+                or settings.object_storage_allow_insecure_endpoints
+            ),
+        )
+        existing = self.storage.credentials
+        credentials = ObjectStorageService.build_credentials(
+            access_key_id=self.access_key_id.data
+            or existing.get("access_key_id"),
+            secret_access_key=self.secret_access_key.data
+            or existing.get("secret_access_key"),
+            session_token=(
+                None
+                if self.clear_session_token.data
+                else (
+                    self.session_token.data
+                    if self.session_token.data not in (None, "")
+                    else existing.get("session_token")
+                )
+            ),
+        )
+        return config, credentials
 
 
 class StorageQueryForm(StarletteForm):

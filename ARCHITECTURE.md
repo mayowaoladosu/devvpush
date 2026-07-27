@@ -27,6 +27,7 @@ This document describes the high‑level architecture of /dev/push, how the main
 - **Runners**: Zero-config apps run inside language containers pulled from the registry catalog. Dockerfile apps are built into immutable per-deployment images and run their image-defined command.
 - **Dependency cache**: Official zero-config runners direct package-manager caches to `/cache`. DevPush mounts a host-backed generation isolated by project, environment, and runner image. Cache clears rotate generations atomically; background pruning removes only generations no longer mounted by current, rollback, or stopped containers.
 - **Persistent storage**: Team-owned SQLite databases and volume directories connect to selected project environments. `StorageService` validates container paths, prevents overlapping mounts, resolves deterministic host paths, and blocks destructive actions while any retained container references a resource.
+- **Object storage**: Team-owned S3/R2-compatible connections store only non-secret provider metadata in JSON; Fernet-encrypted credentials are decrypted by the jobs worker and injected into selected runtime environments after all build work completes.
 - **BuildKit**: Only the jobs worker can reach the rootless daemon over a group-restricted Unix socket. BuildKit has persistent layer cache, a private internal network, a read-only root filesystem, bounded resources, and no host Docker socket or control-plane network membership. Public dependency traffic crosses a separate filtered-egress proxy.
 - **Framework detection**: Repository import reads one recursive Git tree and a bounded batch of manifests. The detector ranks every candidate application root, derives package-manager-aware commands, and returns a recommendation plus monorepo alternatives and evidence. Explicit Dockerfiles are associated with their application roots and take precedence while remaining editable.
 - **Reverse proxy**: We have Traefik sitting in front of both app and the deployed runner containers. All routing is done using Traefik labels, and we also maintain environment and branch aliases (e.g. `my-project-env-staging.devpush.app`) using Traefik config files.
@@ -51,6 +52,7 @@ flowchart TB
     GH[GitHub]
     DNS[DNS/Cloudflare]
     ACME[Let's Encrypt]
+    OBJ[S3 / R2 compatible]
   end
 
   subgraph Proxy
@@ -91,6 +93,7 @@ flowchart TB
   A -- SQL --> PG
   A -- enqueue/jobs --> R
   W -- consume/jobs --> R
+  W -- verify temporary object --> OBJ
   M -- read/write --> R
   W -- Docker API --> DP
   W -- Unix socket/build context --> BK
@@ -98,6 +101,7 @@ flowchart TB
   BK -- public HTTP/S only --> EP
   M -- Docker API --> DP
   DP -- create/manage --> RC
+  RC -- runtime object API --> OBJ
   MX -- read-only stats --> DP
   P -- scrape --> MX
   A -- query metrics --> P
@@ -170,6 +174,8 @@ Notes:
 - Active attachments are resolved and row-locked immediately before container creation. Containers carry `devpush.storage_ids` labels for independent mount-use detection.
 - Reset and delete acquire the storage row, inspect all scoped Docker containers, and fail closed on Docker errors or any current/rollback/stopped mount.
 - Provision/reset/delete jobs are transition-specific and deterministic. The monitor scans pending/resetting/deleted rows without holding an idle transaction and recovers a transition if its original request died before enqueueing.
+- Object connections have no host path. Provisioning validates DNS/HTTPS policy, verifies bucket read/write/delete with a temporary object, and marks the connection active without creating or deleting remote buckets.
+- Runtime object variables use collision-checked `DEVPUSH_OBJECT_<NAME>_*` namespaces. A single connection also receives conventional AWS SDK aliases. Credential rotation is verified before one row-locked encrypted update; existing containers retain their prior snapshot.
 
 ### Loki
 
@@ -258,6 +264,7 @@ Notes:
 - Secrets: Fernet encryption for env vars and tokens.
 - Dependency caches: Build-controlled cache contents are isolated by project/environment/runner and never mounted into Dockerfile builds or another project. Clearing rotates paths instead of deleting mounts used by running containers.
 - Persistent storage: host paths are deterministic and identity-validated; only container paths are configurable. Overlapping paths are rejected, platform directories are reserved, and destructive operations fail closed while a labeled or legacy mount exists.
+- Object storage: production custom endpoints require HTTPS and public DNS results. Credentials remain encrypted at rest, are never logged or exposed to build steps, and connection deletion removes only DevPush metadata—never remote objects.
 - Docker: host build/exec/system endpoints are denied by the proxy; repository build steps execute in rootless BuildKit without the host socket. Runtime containers drop all capabilities, cannot gain privileges, and have a PID ceiling. Dockerfile images must declare a non-root user and receive no capabilities; zero-config runner bootstraps receive only the ownership and UID/GID capabilities needed to become the configured non-root user.
 - Source: Dockerfile archives are bounded and extracted with Python's data filter plus explicit path/size checks.
 - Build secrets: GitHub and project secrets are not exposed to Dockerfile instructions or persisted in build context/cache.

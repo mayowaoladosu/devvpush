@@ -1,0 +1,4 @@
+{
+  "components": "app,worker-jobs,worker-monitor",
+  "reason": "Add encrypted S3 and R2 object storage connections"
+}

@@ -505,6 +505,11 @@ async def start_deployment(ctx, deployment_id: str):
                 )
                 mounts.extend(runtime_storage.binds)
                 storage_ids = runtime_storage.storage_ids
+                for key, value in runtime_storage.environment.items():
+                    if key.startswith("DEVPUSH_OBJECT_"):
+                        env_vars_dict[key] = value
+                    else:
+                        env_vars_dict.setdefault(key, value)
                 if storage_ids:
                     labels["devpush.storage_ids"] = ",".join(storage_ids)
                     await _push_loki_log(
@@ -546,7 +551,7 @@ async def start_deployment(ctx, deployment_id: str):
                             **({"Binds": mounts} if mounts else {}),
                             **(
                                 {"GroupAdd": [str(settings.service_gid)]}
-                                if storage_ids
+                                if runtime_storage.mounts
                                 else {}
                             ),
                             "CapDrop": ["ALL"],

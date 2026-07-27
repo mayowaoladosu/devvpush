@@ -17,7 +17,9 @@
       </a>
       <span class="text-muted-foreground/25 font-normal">/</span>
       <a href="{{ request.url_for('team_storage', team_slug=team.slug).include_query_params(storage_type=storage.type) }}">
-        {{ _('Databases') if storage.type == 'database' else _('Volumes') }}
+        {% if storage.type == 'database' %}{{ _('Databases') }}
+        {% elif storage.type == 'volume' %}{{ _('Volumes') }}
+        {% else %}{{ _('Object storage') }}{% endif %}
       </a>
       <span class="text-muted-foreground/25 font-normal">/</span>
       {{ storage.name }}
@@ -28,6 +30,9 @@
     <nav class="sticky top-[122px] min-w-64 h-full flex flex-col gap-y-1 max-lg:hidden">
       <a href="#usage" class="btn-sm-ghost justify-start">{{ _('Usage') }}</a>
       <a href="#general" class="btn-sm-ghost justify-start">{{ _('General') }}</a>
+      {% if storage.type == "object" %}
+        <a href="#connection" class="btn-sm-ghost justify-start">{{ _('Connection') }}</a>
+      {% endif %}
       <a href="#projects" class="btn-sm-ghost justify-start">{{ _('Projects') }}</a>
       {% if storage.type == "database" %}
         <a href="#db-admin" class="btn-sm-ghost justify-start">{{ _('Administration') }}</a>
@@ -45,9 +50,12 @@
           {% if storage.type == "database" %}
             {% set storage_path = "/data/database/" ~ storage.name ~ "/db.sqlite" %}
             {% set storage_description = _('Default SQLite path. Each project connection can override its mount directory:') %}
-          {% else %}
+          {% elif storage.type == "volume" %}
             {% set storage_path = "/data/volume/" ~ storage.name ~ "/" %}
             {% set storage_description = _('Default volume path. Each project connection can override it:') %}
+          {% else %}
+            {% set storage_path = "DEVPUSH_OBJECT_" ~ object_storage_namespace(storage.name) ~ "_*" %}
+            {% set storage_description = _('Runtime environment variable prefix for this object connection:') %}
           {% endif %}
           <p >{{ storage_description }}</p>
           <div class="relative w-full mt-1">
@@ -68,6 +76,12 @@
       <section class="relative rounded-xl scroll-mt-[101px]" id="general">
         {% include "team/partials/_storage-settings-general.html" %}
       </section>
+
+      {% if storage.type == "object" %}
+        <section class="relative rounded-xl scroll-mt-[101px]" id="connection">
+          {% include "team/partials/_storage-settings-object.html" %}
+        </section>
+      {% endif %}
 
       <section class="relative rounded-xl scroll-mt-[101px]" id="projects">
         {% include "team/partials/_storage-settings-associations.html" %}

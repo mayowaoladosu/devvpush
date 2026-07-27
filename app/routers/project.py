@@ -794,7 +794,7 @@ async def project_storage(
         .join(Storage)
         .where(
             StorageProject.project_id == project.id,
-            Storage.type.in_(["database", "volume"]),
+            Storage.type.in_(["database", "volume", "object"]),
             Storage.status != "deleted",
         )
         .options(
@@ -814,7 +814,7 @@ async def project_storage(
         select(Storage)
         .where(
             Storage.team_id == team.id,
-            Storage.type.in_(["database", "volume"]),
+            Storage.type.in_(["database", "volume", "object"]),
             Storage.status != "deleted",
         )
         .order_by(Storage.name.asc())
@@ -870,6 +870,12 @@ async def project_storage(
                     team_id=team.id,
                     created_by_user_id=current_user.id,
                 )
+                if storage.type == "object":
+                    object_config, object_credentials = (
+                        create_storage_form.object_values()
+                    )
+                    storage.config = object_config.as_dict()
+                    storage.credentials = object_credentials.as_dict()
                 db.add(storage)
                 await db.flush()
                 mount_path = await StorageService(settings).validate_attachment(

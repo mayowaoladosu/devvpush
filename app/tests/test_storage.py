@@ -30,13 +30,20 @@ class StorageServiceTests(unittest.IsolatedAsyncioTestCase):
         self.service = StorageService(self.settings)
 
     @staticmethod
-    def storage(name="state", storage_type="volume", storage_id="b" * 32):
+    def storage(
+        name="state",
+        storage_type="volume",
+        storage_id="b" * 32,
+        config=None,
+        credentials=None,
+    ):
         return SimpleNamespace(
             id=storage_id,
             name=name,
             type=storage_type,
             team_id="a" * 32,
-            config={},
+            config=config or {},
+            credentials=credentials or {},
             status="active",
         )
 
@@ -155,6 +162,26 @@ class StorageServiceTests(unittest.IsolatedAsyncioTestCase):
                 environment_ids=[],
             )
 
+    async def test_validate_attachment_rejects_object_namespace_collision(self):
+        storage = self.storage(name="assets-prod", storage_type="object")
+        other = self.storage(
+            name="assets.prod", storage_type="object", storage_id="d" * 32
+        )
+        association = self.association(other, environment_ids=["prod"])
+        result = SimpleNamespace(all=lambda: [(association, other)])
+        db = SimpleNamespace(
+            execute=AsyncMock(side_effect=[SimpleNamespace(), result])
+        )
+
+        with self.assertRaisesRegex(StorageConfigurationError, "namespace"):
+            await self.service.validate_attachment(
+                db,
+                project_id="project-id",
+                storage=storage,
+                mount_path=None,
+                environment_ids=["prod"],
+            )
+
     async def test_runtime_returns_only_matching_environment_mounts(self):
         volume = self.storage()
         database = self.storage(
@@ -203,6 +230,76 @@ class StorageServiceTests(unittest.IsolatedAsyncioTestCase):
                 SimpleNamespace(project_id="project-id", environment_id="prod"),
                 db,
             )
+
+    async def test_runtime_injects_single_object_connection_and_aliases(self):
+        storage = self.storage(
+            name="assets",
+            storage_type="object",
+            config={
+                "provider": "custom",
+                "bucket": "app-assets",
+                "region": "us-east-1",
+                "endpoint_url": "http://minio-e2e:9000",
+                "path_style": True,
+                "public_url": None,
+            },
+            credentials={
+                "access_key_id": "access-key",
+                "secret_access_key": "secret-key-value",
+            },
+        )
+        rows = [(self.association(storage, environment_ids=["prod"]), storage)]
+        db = SimpleNamespace(
+            execute=AsyncMock(return_value=SimpleNamespace(all=lambda: rows))
+        )
+
+        runtime = await self.service.runtime(
+            SimpleNamespace(project_id="project-id", environment_id="prod"),
+            db,
+        )
+
+        self.assertEqual([], runtime.binds)
+        self.assertEqual([storage.id], runtime.storage_ids)
+        self.assertEqual("app-assets", runtime.environment["AWS_S3_BUCKET"])
+        self.assertEqual(
+            "secret-key-value",
+            runtime.environment["DEVPUSH_OBJECT_ASSETS_SECRET_ACCESS_KEY"],
+        )
+
+    async def test_runtime_omits_conventional_aliases_for_multiple_objects(self):
+        def object_storage(name, storage_id, bucket):
+            return self.storage(
+                name=name,
+                storage_type="object",
+                storage_id=storage_id,
+                config={
+                    "provider": "custom",
+                    "bucket": bucket,
+                    "region": "us-east-1",
+                    "endpoint_url": "https://objects.example.com",
+                    "path_style": False,
+                    "public_url": None,
+                },
+                credentials={
+                    "access_key_id": f"{name}-key",
+                    "secret_access_key": f"{name}-secret-value",
+                },
+            )
+
+        first = object_storage("assets", "d" * 32, "app-assets")
+        second = object_storage("backups", "e" * 32, "app-backups")
+        rows = [(self.association(first), first), (self.association(second), second)]
+        db = SimpleNamespace(
+            execute=AsyncMock(return_value=SimpleNamespace(all=lambda: rows))
+        )
+
+        runtime = await self.service.runtime(
+            SimpleNamespace(project_id="project-id", environment_id="prod"), db
+        )
+
+        self.assertNotIn("AWS_ACCESS_KEY_ID", runtime.environment)
+        self.assertIn("DEVPUSH_OBJECT_ASSETS_BUCKET", runtime.environment)
+        self.assertIn("DEVPUSH_OBJECT_BACKUPS_BUCKET", runtime.environment)
 
     async def test_runtime_rejects_matching_storage_that_is_not_ready(self):
         storage = self.storage()

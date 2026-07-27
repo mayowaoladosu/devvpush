@@ -22,6 +22,7 @@ from db import get_db
 from models import User, Project, Deployment, Team, TeamMember, Storage, utc_now
 from services.github import GitHubService
 from services.github_installation import GitHubInstallationService
+from services.object_storage import ObjectStorageService
 
 
 @lru_cache
@@ -443,7 +444,7 @@ async def get_storage_by_name(
         select(Storage).where(
             func.lower(Storage.name) == storage_name.lower(),
             Storage.team_id == team.id,
-            Storage.type.in_(["database", "volume"]),
+            Storage.type.in_(["database", "volume", "object"]),
             Storage.status != "deleted",
         )
     )
@@ -539,6 +540,7 @@ templates.env.globals["toaster_header"] = settings.toaster_header
 templates.env.filters["time_ago"] = time_ago_filter
 templates.env.globals["get_access"] = get_access
 templates.env.globals["is_superadmin"] = is_superadmin
+templates.env.globals["object_storage_namespace"] = ObjectStorageService.namespace
 
 
 def TemplateResponse(

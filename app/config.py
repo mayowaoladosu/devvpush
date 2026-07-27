@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     docker_host: str = "tcp://docker-proxy:2375"
     prometheus_url: str = "http://prometheus:9090"
     prometheus_query_timeout_seconds: int = 8
+    object_storage_allow_private_endpoints: bool = False
+    object_storage_allow_insecure_endpoints: bool = False
+    object_storage_allowed_endpoint_suffixes: str = ""
     buildkit_host: str = "unix:///run/buildkit/buildkitd.sock"
     buildkit_proxy_url: str = "http://10.250.0.2:3128"
     data_dir: str = "/data"

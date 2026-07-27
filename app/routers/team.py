@@ -57,6 +57,12 @@ from forms.storage import (
     StorageProjectForm,
     StorageProjectRemoveForm,
     StorageQueryForm,
+    ObjectStorageConnectionForm,
+)
+from services.object_storage import (
+    ObjectStorageConfigurationError,
+    ObjectStorageConnectionError,
+    ObjectStorageService,
 )
 from services.storage import (
     StorageConfigurationError,
@@ -209,6 +215,10 @@ async def team_storage(
                 team_id=team.id,
                 created_by_user_id=current_user.id,
             )
+            if storage.type == "object":
+                object_config, object_credentials = form.object_values()
+                storage.config = object_config.as_dict()
+                storage.credentials = object_credentials.as_dict()
             db.add(storage)
             await db.commit()
             try:
@@ -251,7 +261,7 @@ async def team_storage(
 
     per_page = 25
 
-    allowed_types = {"database", "volume", "kv", "queue"}
+    allowed_types = {"database", "volume", "object"}
     storage_type = storage_type if storage_type in allowed_types else None
 
     query = select(Storage).where(
@@ -351,7 +361,88 @@ async def team_storage_settings(
 
     delete_form: Any = await StorageDeleteForm.from_formdata(request)
     reset_form: Any = await StorageResetForm.from_formdata(request)
+    object_connection_form = None
+    object_access_key_hint = None
+    if storage.type == "object":
+        object_connection_form = await ObjectStorageConnectionForm.from_formdata(
+            request,
+            storage=storage,
+            data={
+                "provider": storage.config.get("provider"),
+                "bucket": storage.config.get("bucket"),
+                "region": storage.config.get("region"),
+                "account_id": storage.config.get("account_id"),
+                "endpoint_url": storage.config.get("endpoint_url"),
+                "public_url": storage.config.get("public_url"),
+                "path_style": storage.config.get("path_style", False),
+            },
+        )
+        object_access_key_hint = ObjectStorageService.access_key_hint(storage)
     storage_id = storage.id
+
+    if request.method == "POST" and fragment == "object_connection":
+        if not is_admin:
+            flash(
+                request,
+                _("Only team owners and admins can update object credentials."),
+                "warning",
+            )
+        elif (
+            object_connection_form
+            and await object_connection_form.validate_on_submit()
+        ):
+            try:
+                config, credentials = object_connection_form.values()
+                object_storage = ObjectStorageService(settings)
+                await object_storage.verify(config, credentials)
+                locked_storage = (
+                    await db.execute(
+                        select(Storage)
+                        .where(
+                            Storage.id == storage_id,
+                            Storage.type == "object",
+                            Storage.status != "deleted",
+                        )
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if not locked_storage:
+                    raise ObjectStorageConnectionError(
+                        "Object storage connection changed during verification."
+                    )
+                object_storage.configure(locked_storage, config, credentials)
+                locked_storage.status = "active"
+                locked_storage.error = None
+                locked_storage.updated_at = utc_now()
+                await db.commit()
+                logger.info(
+                    "Object storage connection verified: storage_id=%s user_id=%s provider=%s",
+                    storage_id,
+                    current_user.id,
+                    config.provider,
+                )
+            except (
+                ObjectStorageConfigurationError,
+                ObjectStorageConnectionError,
+            ) as exc:
+                object_connection_form.secret_access_key.errors.append(_(str(exc)))
+            except Exception as exc:
+                await db.rollback()
+                logger.error(
+                    "Failed to update object storage %s: %s",
+                    storage_id,
+                    exc.__class__.__name__,
+                )
+                object_connection_form.secret_access_key.errors.append(
+                    _("Object storage connection could not be saved.")
+                )
+            else:
+                flash(
+                    request,
+                    _("Object storage connection verified and saved."),
+                    "success",
+                )
+                return RedirectResponse(url=request.url.path, status_code=303)
 
     if request.method == "POST" and fragment == "danger":
         form_data = await request.form()
@@ -803,6 +894,8 @@ async def team_storage_settings(
             "storage": storage,
             "delete_form": delete_form,
             "reset_form": reset_form,
+            "object_connection_form": object_connection_form,
+            "object_access_key_hint": object_access_key_hint,
             "associations": associations,
             "association_form": association_form,
             "remove_association_form": remove_association_form,

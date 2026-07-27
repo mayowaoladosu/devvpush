@@ -33,6 +33,7 @@ dependencies = [
     "email-validator>=2.2.0",
     "uvloop>=0.21.0",
     "dnspython>=2.7.0",
+    "boto3>=1.40,<2",
 ]
 
 [dependency-groups]

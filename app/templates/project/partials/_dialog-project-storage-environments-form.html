@@ -13,6 +13,7 @@
   {{ edit_storage_form.storage_id(id=False, value=association.storage_id) }}
   <input type="hidden" name="project_id" value="{{ project.id }}">
 
+  {% if association.storage.type != 'object' %}
   <div class="space-y-3">
     <label class="label">{{ _('Project') }}</label>
     <div class="items-center gap-x-2 selection:bg-primary selection:text-primary-foreground dark:bg-input/30 border-input flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none md:text-sm text-muted-foreground">
@@ -20,6 +21,7 @@
       <span class="truncate">{{ project.name }}</span>
     </div>
   </div>
+  {% endif %}
 
   <div class="space-y-3">
     <label class="label">{{ _('Storage') }}</label>

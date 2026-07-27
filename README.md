@@ -15,6 +15,7 @@ An open-source and self-hostable alternative to Vercel, Render, Netlify and the 
 - **Native Dockerfiles**: Build repository Dockerfiles with cached, rootless BuildKit and run the resulting image command.
 - **Fast redeploys**: Reuse isolated package-manager downloads across zero-config deployments and rotate caches without disrupting running releases.
 - **Persistent data**: Attach environment-scoped SQLite databases and local volumes at validated application paths that survive deploys and rollbacks.
+- **Object storage**: Connect AWS S3, Cloudflare R2, or another S3-compatible bucket with encrypted credentials and verified read/write/delete access.
 - **Environment management**: Multiple environments with branch mapping and encrypted environment variables.
 - **Real-time monitoring**: Live and searchable build and runtime logs.
 - **Resource monitoring**: Authenticated Prometheus-backed CPU, memory, network, disk I/O, and process dashboards per deployment.
@@ -150,6 +151,22 @@ monitor recovers state committed immediately before an enqueue/process crash.
 Local storage capacity is managed by the host filesystem; use
 operator disk quotas where hard tenant limits are required.
 
+Object storage connections are team-owned and can be attached to selected
+project environments. Access keys, secret keys, and optional session tokens are
+Fernet-encrypted in PostgreSQL. Provisioning performs a bounded `HEAD`, writes a
+unique temporary object, reads it back, and deletes it; DevPush never creates or
+deletes the bucket itself. Production custom endpoints require HTTPS and must
+resolve only to public addresses. Each connection receives a stable namespace,
+for example `DEVPUSH_OBJECT_ASSETS_BUCKET` and
+`DEVPUSH_OBJECT_ASSETS_SECRET_ACCESS_KEY`. When exactly one object connection is
+active, conventional `AWS_*`/`S3_*` aliases are also supplied unless the project
+explicitly defines them. Credentials are added only when the runtime container
+is created and are never sent to rootless BuildKit or Dockerfile instructions.
+Rotated credentials apply to future deployments; retained releases keep their
+original runtime snapshot until replaced. Production custom hosts require an
+operator-approved DNS suffix. Private-network MinIO and HTTP endpoints require
+additional explicit operator opt-ins; they are denied by default.
+
 **Key scripts**:
 
 - `./scripts/start.sh` / `stop.sh` / `restart.sh` — manage the full stack or selected components (`--components <csv>`)
@@ -220,6 +237,9 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for codebase structure.
 | `PROMETHEUS_RETENTION_SIZE`         | Prometheus byte-size retention ceiling (for example `512MB` or `2GB`). Default: `2GB`.                                                   |
 | `PROMETHEUS_MEMORY_LIMIT`           | Prometheus container memory limit. Default: `384m`.                                                                                      |
 | `PROMETHEUS_CPUS`                   | Prometheus container CPU limit. Default: `0.75`.                                                                                         |
+| `OBJECT_STORAGE_ALLOW_PRIVATE_ENDPOINTS` | Permit operator-trusted private DNS/IP targets for S3-compatible endpoints. Default: `false`.                                      |
+| `OBJECT_STORAGE_ALLOW_INSECURE_ENDPOINTS` | Permit HTTP rather than HTTPS for operator-trusted S3-compatible endpoints. Default: `false`.                                      |
+| `OBJECT_STORAGE_ALLOWED_ENDPOINT_SUFFIXES` | Comma-separated trusted DNS suffixes permitted for custom S3-compatible endpoints in production. Default: empty.                  |
 | `BUILDKIT_HOST`                     | Rootless BuildKit socket. Default: `unix:///run/buildkit/buildkitd.sock`.                                                               |
 | `BUILDKIT_INTERNAL_SUBNET`          | Private internal build network. Default: `10.250.0.0/24`.                                                                                |
 | `BUILDKIT_PROXY_IP`                 | Filtered-egress proxy address inside that subnet. Default: `10.250.0.2`.                                                                 |

@@ -636,7 +636,9 @@ class Storage(Base):
     )
     name: Mapped[str] = mapped_column(String(100), index=True)
     type: Mapped[str] = mapped_column(
-        SQLAEnum("database", "volume", "kv", "queue", name="storage_type"),
+        SQLAEnum(
+            "database", "volume", "kv", "queue", "object", name="storage_type"
+        ),
         nullable=False,
     )
     status: Mapped[str] = mapped_column(
@@ -646,6 +648,9 @@ class Storage(Base):
     )
     config: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, default=dict
+    )
+    _credentials: Mapped[str | None] = mapped_column(
+        "credentials_encrypted", Text, nullable=True
     )
     error: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     created_by_user_id: Mapped[int | None] = mapped_column(
@@ -697,6 +702,24 @@ class Storage(Base):
                 return "rose"
             case "queue":
                 return "green"
+            case "object":
+                return "purple"
+
+    @property
+    def credentials(self) -> dict[str, str]:
+        if not self._credentials:
+            return {}
+        payload = get_fernet().decrypt(self._credentials.encode()).decode()
+        value = json.loads(payload)
+        return value if isinstance(value, dict) else {}
+
+    @credentials.setter
+    def credentials(self, value: dict[str, str] | None):
+        if value:
+            payload = json.dumps(value, sort_keys=True, separators=(",", ":"))
+            self._credentials = get_fernet().encrypt(payload.encode()).decode()
+        else:
+            self._credentials = None
 
 
 class StorageProject(Base):
@@ -708,7 +731,7 @@ class StorageProject(Base):
     storage_id: Mapped[str] = mapped_column(ForeignKey("storage.id"), index=True)
     project_id: Mapped[str] = mapped_column(ForeignKey("project.id"), index=True)
     environment_ids: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
-    mount_path: Mapped[str] = mapped_column(String(255), nullable=False)
+    mount_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
     secrets: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, default=dict
     )
@@ -730,7 +753,9 @@ class StorageProject(Base):
     )
 
     @property
-    def application_path(self) -> str:
+    def application_path(self) -> str | None:
+        if not self.mount_path:
+            return None
         if self.storage and self.storage.type == "database":
             return f"{self.mount_path}/db.sqlite"
         return self.mount_path

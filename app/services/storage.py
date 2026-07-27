@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import Settings
 from models import Deployment, Project, Storage, StorageProject, utc_now
+from services.object_storage import ObjectStorageService
 
 
 MAX_STORAGE_ATTACHMENTS = 16
@@ -69,6 +70,8 @@ class RuntimeStorageMount:
 @dataclass(frozen=True)
 class RuntimeStorage:
     mounts: tuple[RuntimeStorageMount, ...]
+    environment: dict[str, str]
+    object_storage_ids: tuple[str, ...] = ()
 
     @property
     def binds(self) -> list[str]:
@@ -76,7 +79,9 @@ class RuntimeStorage:
 
     @property
     def storage_ids(self) -> list[str]:
-        return [mount.storage_id for mount in self.mounts]
+        return [mount.storage_id for mount in self.mounts] + list(
+            self.object_storage_ids
+        )
 
 
 @dataclass(frozen=True)
@@ -100,8 +105,8 @@ class StorageService:
             raise StorageConfigurationError("Storage team identifier is invalid.")
         if not _STORAGE_NAME_PATTERN.fullmatch(str(storage.name)):
             raise StorageConfigurationError("Storage name is invalid.")
-        if storage.type not in {"database", "volume"}:
-            raise StorageConfigurationError("Storage type is not mountable.")
+        if storage.type not in {"database", "volume", "object"}:
+            raise StorageConfigurationError("Storage type is not supported.")
 
     @staticmethod
     def default_mount_path(storage_type: str, storage_name: str) -> str:
@@ -170,6 +175,10 @@ class StorageService:
 
     def local_path(self, storage: Storage) -> Path:
         self.validate_storage_identity(storage)
+        if storage.type not in {"database", "volume"}:
+            raise StorageConfigurationError(
+                "Object storage does not have a managed host path."
+            )
         root = (Path(self.settings.data_dir) / "storage").resolve()
         candidate = (
             root
@@ -206,9 +215,12 @@ class StorageService:
         mount_path: str | None,
         environment_ids: list[str] | None,
         association_id: str | None = None,
-    ) -> str:
-        normalized = self.normalize_mount_path(mount_path) or self.default_mount_path(
-            storage.type, storage.name
+    ) -> str | None:
+        normalized = (
+            None
+            if storage.type == "object"
+            else self.normalize_mount_path(mount_path)
+            or self.default_mount_path(storage.type, storage.name)
         )
         await db.execute(
             select(Project.id)
@@ -229,17 +241,26 @@ class StorageService:
             raise StorageConfigurationError(
                 f"A project can connect at most {MAX_STORAGE_ATTACHMENTS} storage resources."
             )
-
         requested_environments = environment_ids or []
         for association, attached_storage in attachments:
             if association_id and str(association.id) == str(association_id):
                 continue
-            existing_path = self.effective_mount_path(
-                attached_storage, association
-            )
-            if self.environments_overlap(
+            if not self.environments_overlap(
                 requested_environments, association.environment_ids or []
-            ) and self.paths_overlap(normalized, existing_path):
+            ):
+                continue
+            if storage.type == "object" and attached_storage.type == "object":
+                if ObjectStorageService.namespace(
+                    storage.name
+                ) == ObjectStorageService.namespace(attached_storage.name):
+                    raise StorageConfigurationError(
+                        f'Environment variable namespace conflicts with object storage "{attached_storage.name}".'
+                    )
+                continue
+            if storage.type == "object" or attached_storage.type == "object":
+                continue
+            existing_path = self.effective_mount_path(attached_storage, association)
+            if normalized and self.paths_overlap(normalized, existing_path):
                 raise StorageConfigurationError(
                     f'Mount path conflicts with storage "{attached_storage.name}" in one or more selected environments.'
                 )
@@ -292,7 +313,7 @@ class StorageService:
             .where(
                 StorageProject.project_id == deployment.project_id,
                 Storage.status != "deleted",
-                Storage.type.in_(["database", "volume"]),
+                Storage.type.in_(["database", "volume", "object"]),
             )
             .order_by(Storage.id.asc())
         )
@@ -301,6 +322,8 @@ class StorageService:
         result = await db.execute(query)
 
         mounts: list[RuntimeStorageMount] = []
+        environment: dict[str, str] = {}
+        object_storages: list[Storage] = []
         for association, storage in result.all():
             environment_ids = association.environment_ids or []
             if environment_ids and deployment.environment_id not in environment_ids:
@@ -309,7 +332,19 @@ class StorageService:
                 raise StorageConfigurationError(
                     f'Storage "{storage.name}" is not ready (status: {storage.status}).'
                 )
+            if storage.type == "object":
+                values = ObjectStorageService.runtime_environment(storage)
+                duplicate = set(environment) & set(values)
+                if duplicate:
+                    raise StorageConfigurationError(
+                        "Object storage environment variable namespace conflicts with another connection."
+                    )
+                environment.update(values)
+                object_storages.append(storage)
+                continue
             container_path = self.effective_mount_path(storage, association)
+            if not container_path:
+                raise StorageConfigurationError("Storage mount path is unavailable.")
             for existing in mounts:
                 if self.paths_overlap(container_path, existing.container_path):
                     raise StorageConfigurationError(
@@ -325,11 +360,25 @@ class StorageService:
                 )
             )
 
-        if len(mounts) > MAX_STORAGE_ATTACHMENTS:
+        if len(mounts) + len(object_storages) > MAX_STORAGE_ATTACHMENTS:
             raise StorageConfigurationError(
-                f"A deployment can mount at most {MAX_STORAGE_ATTACHMENTS} storage resources."
+                f"A deployment can use at most {MAX_STORAGE_ATTACHMENTS} storage resources."
             )
-        return RuntimeStorage(tuple(mounts))
+        if len(object_storages) == 1:
+            object_storage = object_storages[0]
+            config = ObjectStorageService.config_from_storage(object_storage)
+            credentials = ObjectStorageService.credentials_from_storage(
+                object_storage
+            )
+            for key, value in ObjectStorageService.conventional_environment(
+                config, credentials
+            ).items():
+                environment.setdefault(key, value)
+        return RuntimeStorage(
+            tuple(mounts),
+            environment,
+            tuple(storage.id for storage in object_storages),
+        )
 
     async def mounted_containers(self, storage: Storage) -> list[StorageMountUsage]:
         self.validate_storage_identity(storage)

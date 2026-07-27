@@ -1,0 +1,79 @@
+{% from "macros/select.html" import select %}
+
+<div
+  class="space-y-4"
+  x-data="{ objectProvider: '{{ form.provider.data or 'aws' }}' }"
+>
+  <div class="space-y-3">
+    {{ form.provider.label(class_="label") }}
+    {{ form.provider(class_="input w-full", **{"x-model": "objectProvider"}) }}
+  </div>
+
+  <div class="space-y-3">
+    {{ form.bucket.label(class_="label") }}
+    {{ form.bucket(class_="input w-full", placeholder=_("my-app-assets")) }}
+    {% for error in form.bucket.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+  </div>
+
+  <div class="space-y-3" x-show="objectProvider !== 'r2'">
+    {{ form.region.label(class_="label") }}
+    {{ form.region(class_="input w-full", placeholder=_("us-east-1")) }}
+    {% for error in form.region.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+  </div>
+
+  <div class="space-y-3" x-show="objectProvider === 'r2'">
+    {{ form.account_id.label(class_="label") }}
+    {{ form.account_id(class_="input w-full font-mono text-[13px]", placeholder=_("32-character account ID")) }}
+    {% for error in form.account_id.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+  </div>
+
+  <div class="space-y-3" x-show="objectProvider === 'custom'">
+    {{ form.endpoint_url.label(class_="label") }}
+    {{ form.endpoint_url(class_="input w-full font-mono text-[13px]", placeholder=_("https://objects.example.com")) }}
+    {% for error in form.endpoint_url.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+    <label class="flex items-center gap-2 text-sm">
+      {{ form.path_style(class_="checkbox") }}
+      <span>{{ _('Use path-style URLs (common for MinIO and custom providers)') }}</span>
+    </label>
+  </div>
+
+  <div class="space-y-3">
+    {{ form.public_url.label(class_="label") }}
+    {{ form.public_url(class_="input w-full font-mono text-[13px]", placeholder=_("Optional CDN or public bucket URL")) }}
+    {% for error in form.public_url.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+  </div>
+
+  <div class="grid gap-4 sm:grid-cols-2">
+    <div class="space-y-3">
+      {{ form.access_key_id.label(class_="label") }}
+      {{ form.access_key_id(class_="input w-full font-mono text-[13px]", placeholder=(object_access_key_hint if object_access_key_hint else _("Access key ID"))) }}
+      {% if object_access_key_hint %}<p class="text-muted-foreground text-xs">{{ _('Leave blank to keep %(hint)s.', hint=object_access_key_hint) }}</p>{% endif %}
+      {% for error in form.access_key_id.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+    </div>
+    <div class="space-y-3">
+      {{ form.secret_access_key.label(class_="label") }}
+      {{ form.secret_access_key(class_="input w-full", placeholder=(_("Leave blank to keep current secret") if object_access_key_hint else _("Secret access key")), autocomplete="new-password") }}
+      {% for error in form.secret_access_key.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+    </div>
+  </div>
+
+  <div class="space-y-3">
+    {{ form.session_token.label(class_="label") }}
+    {{ form.session_token(class_="input w-full", placeholder=_("Optional temporary session token"), autocomplete="new-password") }}
+    {% for error in form.session_token.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+    {% if form.clear_session_token is defined %}
+      <label class="flex items-center gap-2 text-sm">
+        {{ form.clear_session_token(class_="checkbox") }}
+        <span>{{ _('Remove the stored session token') }}</span>
+      </label>
+    {% endif %}
+  </div>
+
+  <div class="alert">
+    {% include "icons/info.svg" %}
+    <section>
+      <h3>{{ _('Read, write, and delete verification') }}</h3>
+      <p>{{ _('DevPush writes a temporary object, reads it back, and removes it. Bucket contents are never managed or deleted by DevPush.') }}</p>
+    </section>
+  </div>
+</div>

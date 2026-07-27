@@ -111,6 +111,12 @@
     </div>
 
     <div class="flex-1 space-y-2 min-w-0">
+      {% if storage.type == 'object' %}
+        {{ association_form.mount_path(id=False, value="", hidden=true) }}
+        <div class="input w-full font-mono text-[13px] text-muted-foreground truncate">
+          DEVPUSH_OBJECT_{{ object_storage_namespace(storage.name) }}_*
+        </div>
+      {% else %}
       {{ association_form.mount_path(
         id=False,
         class_="input w-full font-mono text-[13px]",
@@ -121,6 +127,7 @@
         {% for error in association_form.mount_path.errors %}
           <p class="text-destructive text-sm">{{ error }}</p>
         {% endfor %}
+      {% endif %}
       {% endif %}
     </div>
     
@@ -153,7 +160,7 @@
         <div class="flex gap-x-2 border-b border-border/50 pb-2" x-show="activeForm !== null || {{ associations | length }} > 0">
           <div class="flex-1 label">{{ _('Project') }}</div>
           <div class="flex-1 label">{{ _('Environments') }}</div>
-          <div class="flex-1 label">{{ _('Mount path') }}</div>
+          <div class="flex-1 label">{{ _('Runtime access') }}</div>
           <div class="shrink-0 w-20"></div>
         </div>
         {% for association in associations %}
@@ -180,7 +187,11 @@
                 </span>
               </div>
               <div class="flex-1 min-w-0 truncate font-mono text-xs text-muted-foreground">
-                {{ association.application_path }}
+                {% if storage.type == 'object' %}
+                  DEVPUSH_OBJECT_{{ object_storage_namespace(storage.name) }}_*
+                {% else %}
+                  {{ association.application_path }}
+                {% endif %}
               </div>
               <div class="flex items-center w-20">
                 <button

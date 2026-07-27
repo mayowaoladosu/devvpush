@@ -15,7 +15,8 @@
   "database": _("Database"),
   "volume": _("Volume"),
   "kv": _("KV"),
-  "queue": _("Queue")
+  "queue": _("Queue"),
+  "object": _("Object storage")
 } %}
 
 {% include "project/partials/_dialog-project-storage.html" %}
@@ -58,6 +59,8 @@
               <span class="truncate max-w-3xs">{{ association.storage.name }}</span>
             </a>
 
+            {% set storage = association.storage %}
+            {% set object_prefix = "DEVPUSH_OBJECT_" ~ object_storage_namespace(storage.name) %}
             <div
               class="text-muted-foreground"
               data-tooltip="{{ _('Environments') }}"
@@ -78,16 +81,15 @@
               data-tooltip="{{ _('Application path') }}"
               aria-label="{{ _('Application path') }}"
             >
-              {{ association.application_path }}
+              {{ object_prefix ~ '_*' if storage.type == 'object' else association.application_path }}
             </div>
 
-            {% set storage = association.storage %}
             {% include "project/partials/_storage-status.html" %}
 
             <div class="flex items-center ml-auto">
               {{ copy(
-                value=association.application_path,
-                attrs={"tooltip": _('Copy application path')},
+                value=(object_prefix if storage.type == 'object' else association.application_path),
+                attrs={"tooltip": _('Copy environment prefix') if storage.type == 'object' else _('Copy application path')},
                 class="btn-sm-icon-ghost"
               ) }}
 

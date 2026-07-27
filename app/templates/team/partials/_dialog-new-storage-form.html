@@ -13,6 +13,12 @@
     {{ _("Volume") }}
   </div>
 {% endset %}
+{% set object_label %}
+  <div class="flex items-center gap-x-2">
+    {{ icon_avatar(type="object", size="xs") }}
+    {{ _("Object storage") }}
+  </div>
+{% endset %}
 {% set kv_label %}
   <div class="flex items-center gap-x-2">
     {{ icon_avatar(type="kv", size="xs") }}
@@ -34,19 +40,12 @@
   hx-indicator="find .htmx-indicator"
   hx-disabled-elt="find button[type='submit']"
   class="space-y-4"
-  x-data="{ name: '{{ form.name.data or "" }}' }"
+  x-data="{ name: '{{ form.name.data or "" }}', storageType: '{{ form.type.data or "database" }}' }"
 >
   {{ form.csrf_token() }}
   <div class="space-y-3 flex-1">
     {{ form.type.label(class_="label") }}
-    {{ select(
-      name="type",
-      selected=form.type.data,
-      items=[
-        {"label": database_label, "value": "database"},
-        {"label": volume_label, "value": "volume"},
-      ],
-    ) }}
+    {{ form.type(class_="input w-full", **{"x-model": "storageType"}) }}
   </div>
   <div class="space-y-3">
     {{ form.name.label(class="label") }}
@@ -59,6 +58,10 @@
     {% for error in form.name.errors %}
     <p class="text-destructive text-sm">{{ error }}</p>
     {% endfor %}
+  </div>
+  <div x-show="storageType === 'object'" class="border-t pt-4">
+    {% set object_access_key_hint = none %}
+    {% include "team/partials/_object-storage-fields.html" with context %}
   </div>
   <footer class="flex justify-end gap-x-2">
     <button

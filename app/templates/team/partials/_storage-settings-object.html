@@ -1,0 +1,33 @@
+<div class="card">
+  <header class="border-b">
+    <h2>{{ _('Object storage connection') }}</h2>
+    <p>{{ _('Verify bucket access or rotate credentials. Existing deployment containers keep their current environment until redeployed.') }}</p>
+  </header>
+
+  <section>
+    {% if get_access(role, "admin") %}
+      <form
+        method="post"
+        action="{{ url_for('team_storage_settings', team_slug=team.slug, storage_name=storage.name).include_query_params(fragment='object_connection') }}"
+        class="space-y-5"
+      >
+        {{ object_connection_form.csrf_token(id=False) }}
+        {% set form = object_connection_form %}
+        {% include "team/partials/_object-storage-fields.html" with context %}
+        <footer class="flex justify-end">
+          <button type="submit" class="btn group">
+            {{ _('Verify and save') }}
+            <div class="htmx-indicator [&>svg]:size-4 [&>svg]:animate-spin">{% include "icons/loader.svg" %}</div>
+          </button>
+        </footer>
+      </form>
+    {% else %}
+      <div class="space-y-3 text-sm">
+        <div class="flex justify-between gap-4"><span class="text-muted-foreground">{{ _('Endpoint') }}</span><span class="font-mono break-all">{{ storage.config.get('endpoint_url') }}</span></div>
+        <div class="flex justify-between gap-4"><span class="text-muted-foreground">{{ _('Region') }}</span><span class="font-mono">{{ storage.config.get('region') }}</span></div>
+        <div class="flex justify-between gap-4"><span class="text-muted-foreground">{{ _('Access key') }}</span><span class="font-mono">{{ object_access_key_hint }}</span></div>
+        <p class="text-muted-foreground">{{ _('Only team owners and admins can test or rotate credentials.') }}</p>
+      </div>
+    {% endif %}
+  </section>
+</div>
