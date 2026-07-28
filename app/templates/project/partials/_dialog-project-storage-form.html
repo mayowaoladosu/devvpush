@@ -20,6 +20,12 @@
     {{ _("Object storage") }}
   </div>
 {% endset %}
+{% set media_label %}
+  <div class="flex items-center gap-x-2">
+    {{ icon_avatar(type="media", size="xs") }}
+    {{ _("Cloudinary media") }}
+  </div>
+{% endset %}
 
 {% set storage_types = {} %}
 {% for storage in storages or [] %}
@@ -113,9 +119,13 @@
       {% set object_access_key_hint = none %}
       {% include "team/partials/_object-storage-fields.html" with context %}
     </div>
+    <div x-show="storageType === 'media'" class="border-t pt-4">
+      {% set media_api_key_hint = none %}
+      {% include "team/partials/_media-provider-fields.html" with context %}
+    </div>
   {% endif %}
 
-  <div class="space-y-3" x-show="storageType !== 'object'">
+  <div class="space-y-3" x-show="!['object', 'media'].includes(storageType)">
     {{ form.mount_path.label(class_="label") }}
     {{ form.mount_path(
       class_="input font-mono text-[13px]",

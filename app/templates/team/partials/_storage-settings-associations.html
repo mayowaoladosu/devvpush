@@ -111,10 +111,10 @@
     </div>
 
     <div class="flex-1 space-y-2 min-w-0">
-      {% if storage.type == 'object' %}
+      {% if storage.type in ['object', 'media'] %}
         {{ association_form.mount_path(id=False, value="", hidden=true) }}
         <div class="input w-full font-mono text-[13px] text-muted-foreground truncate">
-          DEVPUSH_OBJECT_{{ object_storage_namespace(storage.name) }}_*
+          {% if storage.type == 'object' %}DEVPUSH_OBJECT_{{ object_storage_namespace(storage.name) }}_*{% else %}DEVPUSH_MEDIA_{{ media_provider_namespace(storage.name) }}_*{% endif %}
         </div>
       {% else %}
       {{ association_form.mount_path(
@@ -189,6 +189,8 @@
               <div class="flex-1 min-w-0 truncate font-mono text-xs text-muted-foreground">
                 {% if storage.type == 'object' %}
                   DEVPUSH_OBJECT_{{ object_storage_namespace(storage.name) }}_*
+                {% elif storage.type == 'media' %}
+                  DEVPUSH_MEDIA_{{ media_provider_namespace(storage.name) }}_*
                 {% else %}
                   {{ association.application_path }}
                 {% endif %}

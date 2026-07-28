@@ -44,6 +44,10 @@
             <span class="badge-outline font-mono text-xs">
               {{ storage.config.get('bucket') }}
             </span>
+          {% elif storage.type == "media" %}
+            <span class="badge-outline font-mono text-xs">
+              {{ storage.config.get('cloud_name') }}
+            </span>
           {% endif %}
           {% if get_access(role, "creator") %}
             <a

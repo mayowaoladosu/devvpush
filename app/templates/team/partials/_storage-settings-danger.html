@@ -3,6 +3,8 @@
     <h2>{{ _('Danger zone') }}</h2>
     {% if storage.type == 'object' %}
       <p>{{ _('Disconnect this credential-backed connection. The remote bucket and its objects are never deleted by DevPush.') }}</p>
+    {% elif storage.type == 'media' %}
+      <p>{{ _('Disconnect this credential-backed connection. Cloudinary assets and transformations are never deleted by DevPush.') }}</p>
     {% else %}
       <p>{{ _('Reset or permanently delete storage data. These actions are blocked while any deployment container still references this storage.') }}</p>
     {% endif %}
@@ -11,7 +13,7 @@
   <section class="flex items-start gap-x-4">
     {% if get_access(role, "admin") %}
       {% from "macros/dialog.html" import dialog %}
-      {% if storage.type != 'object' %}
+      {% if storage.type not in ['object', 'media'] %}
       {% set reset_trigger %}
         {% include "icons/rotate-ccw.svg" %}
         {{ _('Reset %(type)s', type=storage.type) }}
@@ -60,7 +62,7 @@
       {% endif %}
       {% set trigger %}
         {% include "icons/trash-2.svg" %}
-        {{ _('Disconnect object storage') if storage.type == 'object' else _('Delete %(type)s', type=storage.type) }}
+        {{ _('Disconnect object storage') if storage.type == 'object' else (_('Disconnect media provider') if storage.type == 'media' else _('Delete %(type)s', type=storage.type)) }}
       {% endset %}
       {% call dialog(
         trigger=trigger,
@@ -73,6 +75,8 @@
       <div class="space-y-4" x-data="{ confirm: '' }">
         {% if storage.type == 'object' %}
           <p>{{ _('This removes the DevPush connection and encrypted credentials. It does not delete the remote bucket or any objects.') }}</p>
+        {% elif storage.type == 'media' %}
+          <p>{{ _('This removes the DevPush connection and encrypted credentials. It does not delete any Cloudinary assets or transformations.') }}</p>
         {% else %}
           <p>{{ _('This will delete the storage and all of its data. This action cannot be undone.') }}</p>
         {% endif %}

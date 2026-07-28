@@ -1,0 +1,43 @@
+<div class="space-y-4">
+  <div class="space-y-3">
+    {{ form.cloud_name.label(class_="label") }}
+    {{ form.cloud_name(class_="input w-full font-mono text-[13px]", placeholder=_("Cloudinary cloud name")) }}
+    {% for error in form.cloud_name.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+  </div>
+
+  <div class="space-y-3">
+    {{ form.cloudinary_region.label(class_="label") }}
+    {{ form.cloudinary_region(class_="input w-full") }}
+    {% for error in form.cloudinary_region.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+    <p class="text-muted-foreground text-xs">{{ _('Choose EU or Asia Pacific only for a Cloudinary account provisioned in that data center.') }}</p>
+  </div>
+
+  <div class="space-y-3">
+    {{ form.media_folder.label(class_="label") }}
+    {{ form.media_folder(class_="input w-full font-mono text-[13px]", placeholder=_("Optional application folder")) }}
+    {% for error in form.media_folder.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+    <p class="text-muted-foreground text-xs">{{ _('Injected as the default folder for your application; verification uses and removes a separate temporary asset.') }}</p>
+  </div>
+
+  <div class="grid gap-4 sm:grid-cols-2">
+    <div class="space-y-3">
+      {{ form.cloudinary_api_key.label(class_="label") }}
+      {{ form.cloudinary_api_key(class_="input w-full font-mono text-[13px]", placeholder=(media_api_key_hint if media_api_key_hint else _("API key"))) }}
+      {% if media_api_key_hint %}<p class="text-muted-foreground text-xs">{{ _('Leave blank to keep %(hint)s.', hint=media_api_key_hint) }}</p>{% endif %}
+      {% for error in form.cloudinary_api_key.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+    </div>
+    <div class="space-y-3">
+      {{ form.cloudinary_api_secret.label(class_="label") }}
+      {{ form.cloudinary_api_secret(class_="input w-full", placeholder=(_("Leave blank to keep current secret") if media_api_key_hint else _("API secret")), autocomplete="new-password") }}
+      {% for error in form.cloudinary_api_secret.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+    </div>
+  </div>
+
+  <div class="alert">
+    {% include "icons/info.svg" %}
+    <section>
+      <h3>{{ _('Upload, read, and delete verification') }}</h3>
+      <p>{{ _('DevPush uploads a tiny temporary image, reads its metadata, and removes it. Existing Cloudinary assets are never managed or deleted.') }}</p>
+    </section>
+  </div>
+</div>

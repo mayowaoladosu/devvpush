@@ -16,6 +16,7 @@ An open-source and self-hostable alternative to Vercel, Render, Netlify and the 
 - **Fast redeploys**: Reuse isolated package-manager downloads across zero-config deployments and rotate caches without disrupting running releases.
 - **Persistent data**: Attach environment-scoped SQLite databases and local volumes at validated application paths that survive deploys and rollbacks.
 - **Object storage**: Connect AWS S3, Cloudflare R2, or another S3-compatible bucket with encrypted credentials and verified read/write/delete access.
+- **Media delivery**: Connect Cloudinary with encrypted credentials, temporary upload/read/delete verification, regional API support, and environment-scoped runtime access.
 - **Environment management**: Multiple environments with branch mapping and encrypted environment variables.
 - **Real-time monitoring**: Live and searchable build and runtime logs.
 - **Resource monitoring**: Authenticated Prometheus-backed CPU, memory, network, disk I/O, and process dashboards per deployment.
@@ -167,6 +168,18 @@ original runtime snapshot until replaced. Production custom hosts require an
 operator-approved DNS suffix. Private-network MinIO and HTTP endpoints require
 additional explicit operator opt-ins; they are denied by default.
 
+Cloudinary media connections are separate from S3-compatible object storage.
+DevPush verifies each connection by uploading a tiny temporary image, reading
+its metadata through the Admin API, and deleting it. Cloud name, regional API
+selection, and an optional default folder remain non-secret; API keys and
+secrets are Fernet-encrypted. Runtime variables use a stable
+`DEVPUSH_MEDIA_<NAME>_*` namespace. When exactly one media connection is active,
+DevPush also supplies `CLOUDINARY_URL` and conventional `CLOUDINARY_*` aliases.
+All credentials are added only when the runtime container is created, never to
+BuildKit. Rotation affects future deployments, and disconnecting a connection
+never deletes customer assets or transformations. Production always uses the
+official US, EU, or Asia Pacific Cloudinary API endpoint.
+
 **Key scripts**:
 
 - `./scripts/start.sh` / `stop.sh` / `restart.sh` — manage the full stack or selected components (`--components <csv>`)
@@ -240,6 +253,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for codebase structure.
 | `OBJECT_STORAGE_ALLOW_PRIVATE_ENDPOINTS` | Permit operator-trusted private DNS/IP targets for S3-compatible endpoints. Default: `false`.                                      |
 | `OBJECT_STORAGE_ALLOW_INSECURE_ENDPOINTS` | Permit HTTP rather than HTTPS for operator-trusted S3-compatible endpoints. Default: `false`.                                      |
 | `OBJECT_STORAGE_ALLOWED_ENDPOINT_SUFFIXES` | Comma-separated trusted DNS suffixes permitted for custom S3-compatible endpoints in production. Default: empty.                  |
+| `CLOUDINARY_API_BASE_URL`            | Development-only Cloudinary-compatible test endpoint override. Production always uses the selected official regional endpoint.             |
 | `BUILDKIT_HOST`                     | Rootless BuildKit socket. Default: `unix:///run/buildkit/buildkitd.sock`.                                                               |
 | `BUILDKIT_INTERNAL_SUBNET`          | Private internal build network. Default: `10.250.0.0/24`.                                                                                |
 | `BUILDKIT_PROXY_IP`                 | Filtered-egress proxy address inside that subnet. Default: `10.250.0.2`.                                                                 |

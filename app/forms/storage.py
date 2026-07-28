@@ -21,6 +21,10 @@ from services.object_storage import (
     ObjectStorageConfigurationError,
     ObjectStorageService,
 )
+from services.media_provider import (
+    MediaProviderConfigurationError,
+    MediaProviderService,
+)
 from services.storage import StorageConfigurationError, StorageService
 
 
@@ -55,6 +59,7 @@ class StorageCreateForm(StarletteForm):
             ("database", _("Database")),
             ("volume", _("Volume")),
             ("object", _("Object storage")),
+            ("media", _("Cloudinary media")),
         ],
     )
     name = StringField(
@@ -105,6 +110,27 @@ class StorageCreateForm(StarletteForm):
         _l("Session token"), validators=[Optional(), Length(max=4096)]
     )
     path_style = BooleanField(_l("Use path-style URLs"), default=False)
+    cloud_name = StringField(
+        _l("Cloud name"), validators=[Optional(), Length(max=128)]
+    )
+    cloudinary_region = SelectField(
+        _l("Cloudinary data center"),
+        choices=[
+            ("us", _("US (default)")),
+            ("eu", _("Europe")),
+            ("ap", _("Asia Pacific")),
+        ],
+        validators=[Optional()],
+    )
+    media_folder = StringField(
+        _l("Default folder"), validators=[Optional(), Length(max=255)]
+    )
+    cloudinary_api_key = StringField(
+        _l("API key"), validators=[Optional(), Length(max=128)]
+    )
+    cloudinary_api_secret = PasswordField(
+        _l("API secret"), validators=[Optional(), Length(max=256)]
+    )
 
     def __init__(
         self,
@@ -147,7 +173,7 @@ class StorageCreateForm(StarletteForm):
                 raise ValidationError(_("Environment not found."))
 
     def validate_mount_path(self, field):
-        if self.type.data == "object":
+        if self.type.data in {"object", "media"}:
             field.data = None
             return
         try:
@@ -182,6 +208,41 @@ class StorageCreateForm(StarletteForm):
             access_key_id=self.access_key_id.data,
             secret_access_key=self.secret_access_key.data,
             session_token=self.session_token.data,
+        )
+        return config, credentials
+
+    def validate_cloudinary_api_secret(self, field):
+        if self.type.data != "media":
+            return
+        if not str(field.data or "").strip():
+            raise ValidationError(_("Cloudinary API secret is required."))
+        try:
+            self.media_values()
+        except MediaProviderConfigurationError as exc:
+            raise ValidationError(_(str(exc))) from exc
+
+    def validate_cloudinary_api_key(self, field):
+        if self.type.data == "media" and not str(field.data or "").strip():
+            raise ValidationError(_("Cloudinary API key is required."))
+
+    def media_values(self):
+        settings = get_settings()
+        custom_api_base_url = (
+            settings.cloudinary_api_base_url
+            if settings.env == "development"
+            else None
+        )
+        config = MediaProviderService.build_config(
+            cloud_name=self.cloud_name.data,
+            region=self.cloudinary_region.data,
+            folder=self.media_folder.data,
+            api_base_url=custom_api_base_url,
+            allow_custom_endpoint=bool(custom_api_base_url),
+            allow_insecure=settings.env == "development",
+        )
+        credentials = MediaProviderService.build_credentials(
+            api_key=self.cloudinary_api_key.data,
+            api_secret=self.cloudinary_api_secret.data,
         )
         return config, credentials
 
@@ -302,7 +363,10 @@ class StorageProjectForm(StarletteForm):
             )
 
     def validate_mount_path(self, field):
-        if self._selected_storage and self._selected_storage.type == "object":
+        if (
+            self._selected_storage
+            and self._selected_storage.type in {"object", "media"}
+        ):
             field.data = None
             return
         try:
@@ -413,6 +477,64 @@ class ObjectStorageConnectionForm(StarletteForm):
                     if self.session_token.data not in (None, "")
                     else existing.get("session_token")
                 )
+            ),
+        )
+        return config, credentials
+
+
+class MediaProviderConnectionForm(StarletteForm):
+    cloud_name = StringField(
+        _l("Cloud name"), validators=[DataRequired(), Length(max=128)]
+    )
+    cloudinary_region = SelectField(
+        _l("Cloudinary data center"),
+        choices=[
+            ("us", _("US (default)")),
+            ("eu", _("Europe")),
+            ("ap", _("Asia Pacific")),
+        ],
+    )
+    media_folder = StringField(
+        _l("Default folder"), validators=[Optional(), Length(max=255)]
+    )
+    cloudinary_api_key = StringField(
+        _l("API key"), validators=[Optional(), Length(max=128)]
+    )
+    cloudinary_api_secret = PasswordField(
+        _l("API secret"), validators=[Optional(), Length(max=256)]
+    )
+    submit = SubmitField(_l("Verify and save"))
+
+    def __init__(self, request: Request, *args, storage: Storage, **kwargs):
+        super().__init__(request, *args, **kwargs)
+        self.storage = storage
+
+    def validate_cloudinary_api_secret(self, field):
+        try:
+            self.values()
+        except MediaProviderConfigurationError as exc:
+            raise ValidationError(_(str(exc))) from exc
+
+    def values(self):
+        settings = get_settings()
+        custom_api_base_url = (
+            settings.cloudinary_api_base_url
+            if settings.env == "development"
+            else None
+        )
+        config = MediaProviderService.build_config(
+            cloud_name=self.cloud_name.data,
+            region=self.cloudinary_region.data,
+            folder=self.media_folder.data,
+            api_base_url=custom_api_base_url,
+            allow_custom_endpoint=bool(custom_api_base_url),
+            allow_insecure=settings.env == "development",
+        )
+        existing = self.storage.credentials
+        credentials = MediaProviderService.build_credentials(
+            api_key=self.cloudinary_api_key.data or existing.get("api_key"),
+            api_secret=(
+                self.cloudinary_api_secret.data or existing.get("api_secret")
             ),
         )
         return config, credentials

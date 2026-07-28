@@ -24,6 +24,15 @@
         <label class="label">{{ _('Bucket') }}</label>
         <input type="text" class="input w-full font-mono text-[13px] text-muted-foreground" value="{{ storage.config.get('bucket', '') }}" readonly />
       </div>
+    {% elif storage.type == "media" %}
+      <div class="space-y-2">
+        <label class="label">{{ _('Provider') }}</label>
+        <input type="text" class="input w-full text-muted-foreground" value="Cloudinary" readonly />
+      </div>
+      <div class="space-y-2">
+        <label class="label">{{ _('Cloud name') }}</label>
+        <input type="text" class="input w-full font-mono text-[13px] text-muted-foreground" value="{{ storage.config.get('cloud_name', '') }}" readonly />
+      </div>
     {% endif %}
 
     <div class="space-y-2">

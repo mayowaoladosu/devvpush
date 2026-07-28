@@ -19,7 +19,8 @@
       <a href="{{ request.url_for('team_storage', team_slug=team.slug).include_query_params(storage_type=storage.type) }}">
         {% if storage.type == 'database' %}{{ _('Databases') }}
         {% elif storage.type == 'volume' %}{{ _('Volumes') }}
-        {% else %}{{ _('Object storage') }}{% endif %}
+        {% elif storage.type == 'object' %}{{ _('Object storage') }}
+        {% else %}{{ _('Media providers') }}{% endif %}
       </a>
       <span class="text-muted-foreground/25 font-normal">/</span>
       {{ storage.name }}
@@ -30,7 +31,7 @@
     <nav class="sticky top-[122px] min-w-64 h-full flex flex-col gap-y-1 max-lg:hidden">
       <a href="#usage" class="btn-sm-ghost justify-start">{{ _('Usage') }}</a>
       <a href="#general" class="btn-sm-ghost justify-start">{{ _('General') }}</a>
-      {% if storage.type == "object" %}
+      {% if storage.type in ["object", "media"] %}
         <a href="#connection" class="btn-sm-ghost justify-start">{{ _('Connection') }}</a>
       {% endif %}
       <a href="#projects" class="btn-sm-ghost justify-start">{{ _('Projects') }}</a>
@@ -54,8 +55,13 @@
             {% set storage_path = "/data/volume/" ~ storage.name ~ "/" %}
             {% set storage_description = _('Default volume path. Each project connection can override it:') %}
           {% else %}
-            {% set storage_path = "DEVPUSH_OBJECT_" ~ object_storage_namespace(storage.name) ~ "_*" %}
-            {% set storage_description = _('Runtime environment variable prefix for this object connection:') %}
+            {% if storage.type == "object" %}
+              {% set storage_path = "DEVPUSH_OBJECT_" ~ object_storage_namespace(storage.name) ~ "_*" %}
+              {% set storage_description = _('Runtime environment variable prefix for this object connection:') %}
+            {% else %}
+              {% set storage_path = "DEVPUSH_MEDIA_" ~ media_provider_namespace(storage.name) ~ "_*" %}
+              {% set storage_description = _('Runtime environment variable prefix for this media connection:') %}
+            {% endif %}
           {% endif %}
           <p >{{ storage_description }}</p>
           <div class="relative w-full mt-1">
@@ -80,6 +86,11 @@
       {% if storage.type == "object" %}
         <section class="relative rounded-xl scroll-mt-[101px]" id="connection">
           {% include "team/partials/_storage-settings-object.html" %}
+        </section>
+      {% endif %}
+      {% if storage.type == "media" %}
+        <section class="relative rounded-xl scroll-mt-[101px]" id="connection">
+          {% include "team/partials/_storage-settings-media.html" %}
         </section>
       {% endif %}
 

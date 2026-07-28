@@ -10,6 +10,7 @@ from sqlalchemy import select, delete
 from config import get_settings
 from db import AsyncSessionLocal
 from models import Storage, StorageProject, utc_now
+from services.media_provider import MediaProviderService
 from services.object_storage import ObjectStorageService
 from services.storage import StorageSafetyError, StorageService
 
@@ -50,6 +51,15 @@ async def provision_storage(ctx, resource_id: str):
                 config = object_storage.config_from_storage(storage)
                 credentials = object_storage.credentials_from_storage(storage)
                 await object_storage.verify(config, credentials)
+                storage.config = {
+                    **config.as_dict(),
+                    "verified_at": utc_now().isoformat(),
+                }
+            elif storage.type == "media":
+                media_provider = MediaProviderService(settings)
+                config = media_provider.config_from_storage(storage)
+                credentials = media_provider.credentials_from_storage(storage)
+                await media_provider.verify(config, credentials)
                 storage.config = {
                     **config.as_dict(),
                     "verified_at": utc_now().isoformat(),
@@ -118,6 +128,8 @@ async def deprovision_storage(ctx, resource_id: str):
             elif storage.type == "volume":
                 await asyncio.to_thread(_remove_volume_path, settings, storage)
             elif storage.type == "object":
+                pass
+            elif storage.type == "media":
                 pass
             else:
                 logger.error(f"{log_prefix} Unsupported storage type: {storage.type}")

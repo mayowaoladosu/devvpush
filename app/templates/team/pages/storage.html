@@ -95,6 +95,11 @@
             {{ _("Object") }}
             <input type="radio" name="storage_type" value="object" class="hidden" {% if storage_type == 'object' %}checked{% endif %}/>
           </label>
+          <label class="btn-sm-outline has-checked:bg-accent has-checked:text-accent-foreground has-checked:dark:bg-accent/50">
+            {{ icon_avatar(type="media", size="xs") }}
+            {{ _("Media") }}
+            <input type="radio" name="storage_type" value="media" class="hidden" {% if storage_type == 'media' %}checked{% endif %}/>
+          </label>
         </div>
         <button
           type="button"

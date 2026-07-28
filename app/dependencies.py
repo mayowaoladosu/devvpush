@@ -22,6 +22,7 @@ from db import get_db
 from models import User, Project, Deployment, Team, TeamMember, Storage, utc_now
 from services.github import GitHubService
 from services.github_installation import GitHubInstallationService
+from services.media_provider import MediaProviderService
 from services.object_storage import ObjectStorageService
 
 
@@ -246,8 +247,11 @@ def _refresh_auth_token(
         },
         settings.secret_key,
     )
+    token_value = (
+        new_token.decode("utf-8") if isinstance(new_token, bytes) else new_token
+    )
     request.state.auth_cookie_refresh = {
-        "value": new_token,
+        "value": token_value,
         "max_age": settings.auth_token_ttl_days * 24 * 60 * 60,
     }
 
@@ -444,7 +448,7 @@ async def get_storage_by_name(
         select(Storage).where(
             func.lower(Storage.name) == storage_name.lower(),
             Storage.team_id == team.id,
-            Storage.type.in_(["database", "volume", "object"]),
+            Storage.type.in_(["database", "volume", "object", "media"]),
             Storage.status != "deleted",
         )
     )
@@ -541,6 +545,7 @@ templates.env.filters["time_ago"] = time_ago_filter
 templates.env.globals["get_access"] = get_access
 templates.env.globals["is_superadmin"] = is_superadmin
 templates.env.globals["object_storage_namespace"] = ObjectStorageService.namespace
+templates.env.globals["media_provider_namespace"] = MediaProviderService.namespace
 
 
 def TemplateResponse(

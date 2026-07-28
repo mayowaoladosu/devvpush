@@ -506,7 +506,7 @@ async def start_deployment(ctx, deployment_id: str):
                 mounts.extend(runtime_storage.binds)
                 storage_ids = runtime_storage.storage_ids
                 for key, value in runtime_storage.environment.items():
-                    if key.startswith("DEVPUSH_OBJECT_"):
+                    if key.startswith(("DEVPUSH_OBJECT_", "DEVPUSH_MEDIA_")):
                         env_vars_dict[key] = value
                     else:
                         env_vars_dict.setdefault(key, value)

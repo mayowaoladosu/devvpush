@@ -19,6 +19,12 @@
     {{ _("Object storage") }}
   </div>
 {% endset %}
+{% set media_label %}
+  <div class="flex items-center gap-x-2">
+    {{ icon_avatar(type="media", size="xs") }}
+    {{ _("Cloudinary media") }}
+  </div>
+{% endset %}
 {% set kv_label %}
   <div class="flex items-center gap-x-2">
     {{ icon_avatar(type="kv", size="xs") }}
@@ -62,6 +68,10 @@
   <div x-show="storageType === 'object'" class="border-t pt-4">
     {% set object_access_key_hint = none %}
     {% include "team/partials/_object-storage-fields.html" with context %}
+  </div>
+  <div x-show="storageType === 'media'" class="border-t pt-4">
+    {% set media_api_key_hint = none %}
+    {% include "team/partials/_media-provider-fields.html" with context %}
   </div>
   <footer class="flex justify-end gap-x-2">
     <button

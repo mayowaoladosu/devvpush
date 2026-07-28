@@ -637,7 +637,13 @@ class Storage(Base):
     name: Mapped[str] = mapped_column(String(100), index=True)
     type: Mapped[str] = mapped_column(
         SQLAEnum(
-            "database", "volume", "kv", "queue", "object", name="storage_type"
+            "database",
+            "volume",
+            "kv",
+            "queue",
+            "object",
+            "media",
+            name="storage_type",
         ),
         nullable=False,
     )
@@ -704,6 +710,8 @@ class Storage(Base):
                 return "green"
             case "object":
                 return "purple"
+            case "media":
+                return "pink"
 
     @property
     def credentials(self) -> dict[str, str]:

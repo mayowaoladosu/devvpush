@@ -16,7 +16,8 @@
   "volume": _("Volume"),
   "kv": _("KV"),
   "queue": _("Queue"),
-  "object": _("Object storage")
+  "object": _("Object storage"),
+  "media": _("Cloudinary media")
 } %}
 
 {% include "project/partials/_dialog-project-storage.html" %}
@@ -61,6 +62,7 @@
 
             {% set storage = association.storage %}
             {% set object_prefix = "DEVPUSH_OBJECT_" ~ object_storage_namespace(storage.name) %}
+            {% set media_prefix = "DEVPUSH_MEDIA_" ~ media_provider_namespace(storage.name) %}
             <div
               class="text-muted-foreground"
               data-tooltip="{{ _('Environments') }}"
@@ -81,15 +83,17 @@
               data-tooltip="{{ _('Application path') }}"
               aria-label="{{ _('Application path') }}"
             >
-              {{ object_prefix ~ '_*' if storage.type == 'object' else association.application_path }}
+              {% if storage.type == 'object' %}{{ object_prefix }}_*
+              {% elif storage.type == 'media' %}{{ media_prefix }}_*
+              {% else %}{{ association.application_path }}{% endif %}
             </div>
 
             {% include "project/partials/_storage-status.html" %}
 
             <div class="flex items-center ml-auto">
               {{ copy(
-                value=(object_prefix if storage.type == 'object' else association.application_path),
-                attrs={"tooltip": _('Copy environment prefix') if storage.type == 'object' else _('Copy application path')},
+                value=(object_prefix if storage.type == 'object' else (media_prefix if storage.type == 'media' else association.application_path)),
+                attrs={"tooltip": _('Copy environment prefix') if storage.type in ['object', 'media'] else _('Copy application path')},
                 class="btn-sm-icon-ghost"
               ) }}
 

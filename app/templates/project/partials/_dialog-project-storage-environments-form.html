@@ -13,7 +13,7 @@
   {{ edit_storage_form.storage_id(id=False, value=association.storage_id) }}
   <input type="hidden" name="project_id" value="{{ project.id }}">
 
-  {% if association.storage.type != 'object' %}
+  {% if association.storage.type not in ['object', 'media'] %}
   <div class="space-y-3">
     <label class="label">{{ _('Project') }}</label>
     <div class="items-center gap-x-2 selection:bg-primary selection:text-primary-foreground dark:bg-input/30 border-input flex h-9 w-full rounded-md border bg-transparent px-3 py-1 text-base shadow-xs transition-[color,box-shadow] outline-none md:text-sm text-muted-foreground">
@@ -53,21 +53,31 @@
     {% endfor %}
   </div>
 
-  <div class="space-y-3">
-    {{ edit_storage_form.mount_path.label(class_="label") }}
-    {{ edit_storage_form.mount_path(
-      id=False,
-      class_="input font-mono text-[13px]",
-      value=association.mount_path,
-      placeholder=_('Default: /data/type/name')
-    ) }}
-    <p class="text-muted-foreground text-sm">
-      {{ _('Absolute path inside future deployment containers.') }}
-    </p>
-    {% for error in edit_storage_form.mount_path.errors %}
-      <p class="text-destructive text-sm">{{ error }}</p>
-    {% endfor %}
-  </div>
+  {% if association.storage.type in ['object', 'media'] %}
+    {{ edit_storage_form.mount_path(id=False, value="", hidden=true) }}
+    <div class="space-y-3">
+      <label class="label">{{ _('Runtime access') }}</label>
+      <div class="input font-mono text-[13px] text-muted-foreground">
+        {% if association.storage.type == 'object' %}DEVPUSH_OBJECT_{{ object_storage_namespace(association.storage.name) }}_*{% else %}DEVPUSH_MEDIA_{{ media_provider_namespace(association.storage.name) }}_*{% endif %}
+      </div>
+    </div>
+  {% else %}
+    <div class="space-y-3">
+      {{ edit_storage_form.mount_path.label(class_="label") }}
+      {{ edit_storage_form.mount_path(
+        id=False,
+        class_="input font-mono text-[13px]",
+        value=association.mount_path,
+        placeholder=_('Default: /data/type/name')
+      ) }}
+      <p class="text-muted-foreground text-sm">
+        {{ _('Absolute path inside future deployment containers.') }}
+      </p>
+      {% for error in edit_storage_form.mount_path.errors %}
+        <p class="text-destructive text-sm">{{ error }}</p>
+      {% endfor %}
+    </div>
+  {% endif %}
 
   <footer class="flex justify-end gap-x-2">
     <button type="button" class="btn-ghost" onclick="this.closest('dialog').close()">{{ _('Cancel') }}</button>

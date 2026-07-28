@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import Settings
 from models import Deployment, Project, Storage, StorageProject, utc_now
+from services.media_provider import MediaProviderService
 from services.object_storage import ObjectStorageService
 
 
@@ -72,6 +73,7 @@ class RuntimeStorage:
     mounts: tuple[RuntimeStorageMount, ...]
     environment: dict[str, str]
     object_storage_ids: tuple[str, ...] = ()
+    media_provider_ids: tuple[str, ...] = ()
 
     @property
     def binds(self) -> list[str]:
@@ -79,8 +81,10 @@ class RuntimeStorage:
 
     @property
     def storage_ids(self) -> list[str]:
-        return [mount.storage_id for mount in self.mounts] + list(
-            self.object_storage_ids
+        return (
+            [mount.storage_id for mount in self.mounts]
+            + list(self.object_storage_ids)
+            + list(self.media_provider_ids)
         )
 
 
@@ -105,7 +109,7 @@ class StorageService:
             raise StorageConfigurationError("Storage team identifier is invalid.")
         if not _STORAGE_NAME_PATTERN.fullmatch(str(storage.name)):
             raise StorageConfigurationError("Storage name is invalid.")
-        if storage.type not in {"database", "volume", "object"}:
+        if storage.type not in {"database", "volume", "object", "media"}:
             raise StorageConfigurationError("Storage type is not supported.")
 
     @staticmethod
@@ -177,7 +181,7 @@ class StorageService:
         self.validate_storage_identity(storage)
         if storage.type not in {"database", "volume"}:
             raise StorageConfigurationError(
-                "Object storage does not have a managed host path."
+                "Remote storage does not have a managed host path."
             )
         root = (Path(self.settings.data_dir) / "storage").resolve()
         candidate = (
@@ -218,7 +222,7 @@ class StorageService:
     ) -> str | None:
         normalized = (
             None
-            if storage.type == "object"
+            if storage.type in {"object", "media"}
             else self.normalize_mount_path(mount_path)
             or self.default_mount_path(storage.type, storage.name)
         )
@@ -257,7 +261,18 @@ class StorageService:
                         f'Environment variable namespace conflicts with object storage "{attached_storage.name}".'
                     )
                 continue
-            if storage.type == "object" or attached_storage.type == "object":
+            if storage.type == "media" and attached_storage.type == "media":
+                if MediaProviderService.namespace(
+                    storage.name
+                ) == MediaProviderService.namespace(attached_storage.name):
+                    raise StorageConfigurationError(
+                        f'Environment variable namespace conflicts with media provider "{attached_storage.name}".'
+                    )
+                continue
+            if storage.type in {"object", "media"} or attached_storage.type in {
+                "object",
+                "media",
+            }:
                 continue
             existing_path = self.effective_mount_path(attached_storage, association)
             if normalized and self.paths_overlap(normalized, existing_path):
@@ -313,7 +328,7 @@ class StorageService:
             .where(
                 StorageProject.project_id == deployment.project_id,
                 Storage.status != "deleted",
-                Storage.type.in_(["database", "volume", "object"]),
+                Storage.type.in_(["database", "volume", "object", "media"]),
             )
             .order_by(Storage.id.asc())
         )
@@ -324,6 +339,7 @@ class StorageService:
         mounts: list[RuntimeStorageMount] = []
         environment: dict[str, str] = {}
         object_storages: list[Storage] = []
+        media_providers: list[Storage] = []
         for association, storage in result.all():
             environment_ids = association.environment_ids or []
             if environment_ids and deployment.environment_id not in environment_ids:
@@ -341,6 +357,16 @@ class StorageService:
                     )
                 environment.update(values)
                 object_storages.append(storage)
+                continue
+            if storage.type == "media":
+                values = MediaProviderService.runtime_environment(storage)
+                duplicate = set(environment) & set(values)
+                if duplicate:
+                    raise StorageConfigurationError(
+                        "Media provider environment variable namespace conflicts with another connection."
+                    )
+                environment.update(values)
+                media_providers.append(storage)
                 continue
             container_path = self.effective_mount_path(storage, association)
             if not container_path:
@@ -360,7 +386,10 @@ class StorageService:
                 )
             )
 
-        if len(mounts) + len(object_storages) > MAX_STORAGE_ATTACHMENTS:
+        if (
+            len(mounts) + len(object_storages) + len(media_providers)
+            > MAX_STORAGE_ATTACHMENTS
+        ):
             raise StorageConfigurationError(
                 f"A deployment can use at most {MAX_STORAGE_ATTACHMENTS} storage resources."
             )
@@ -374,10 +403,21 @@ class StorageService:
                 config, credentials
             ).items():
                 environment.setdefault(key, value)
+        if len(media_providers) == 1:
+            media_provider = media_providers[0]
+            config = MediaProviderService.config_from_storage(media_provider)
+            credentials = MediaProviderService.credentials_from_storage(
+                media_provider
+            )
+            for key, value in MediaProviderService.conventional_environment(
+                config, credentials
+            ).items():
+                environment.setdefault(key, value)
         return RuntimeStorage(
             tuple(mounts),
             environment,
             tuple(storage.id for storage in object_storages),
+            tuple(storage.id for storage in media_providers),
         )
 
     async def mounted_containers(self, storage: Storage) -> list[StorageMountUsage]:

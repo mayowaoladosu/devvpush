@@ -182,6 +182,26 @@ class StorageServiceTests(unittest.IsolatedAsyncioTestCase):
                 environment_ids=["prod"],
             )
 
+    async def test_validate_attachment_rejects_media_namespace_collision(self):
+        storage = self.storage(name="product-media", storage_type="media")
+        other = self.storage(
+            name="product.media", storage_type="media", storage_id="d" * 32
+        )
+        association = self.association(other, environment_ids=["prod"])
+        result = SimpleNamespace(all=lambda: [(association, other)])
+        db = SimpleNamespace(
+            execute=AsyncMock(side_effect=[SimpleNamespace(), result])
+        )
+
+        with self.assertRaisesRegex(StorageConfigurationError, "media provider"):
+            await self.service.validate_attachment(
+                db,
+                project_id="project-id",
+                storage=storage,
+                mount_path=None,
+                environment_ids=["prod"],
+            )
+
     async def test_runtime_returns_only_matching_environment_mounts(self):
         volume = self.storage()
         database = self.storage(
@@ -300,6 +320,74 @@ class StorageServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("AWS_ACCESS_KEY_ID", runtime.environment)
         self.assertIn("DEVPUSH_OBJECT_ASSETS_BUCKET", runtime.environment)
         self.assertIn("DEVPUSH_OBJECT_BACKUPS_BUCKET", runtime.environment)
+
+    async def test_runtime_injects_single_media_connection_and_aliases(self):
+        storage = self.storage(
+            name="product-media",
+            storage_type="media",
+            config={
+                "provider": "cloudinary",
+                "cloud_name": "valid-cloud",
+                "region": "us",
+                "folder": "apps/production",
+                "api_base_url": "https://api.cloudinary.com",
+            },
+            credentials={
+                "api_key": "api-key",
+                "api_secret": "api-secret-value",
+            },
+        )
+        rows = [(self.association(storage, environment_ids=["prod"]), storage)]
+        db = SimpleNamespace(
+            execute=AsyncMock(return_value=SimpleNamespace(all=lambda: rows))
+        )
+
+        runtime = await self.service.runtime(
+            SimpleNamespace(project_id="project-id", environment_id="prod"),
+            db,
+        )
+
+        self.assertEqual([], runtime.binds)
+        self.assertEqual([storage.id], runtime.storage_ids)
+        self.assertIn("CLOUDINARY_URL", runtime.environment)
+        self.assertEqual(
+            "api-secret-value",
+            runtime.environment["DEVPUSH_MEDIA_PRODUCT_MEDIA_API_SECRET"],
+        )
+
+    async def test_runtime_omits_media_aliases_for_multiple_connections(self):
+        def media_storage(name, storage_id, cloud_name):
+            return self.storage(
+                name=name,
+                storage_type="media",
+                storage_id=storage_id,
+                config={
+                    "provider": "cloudinary",
+                    "cloud_name": cloud_name,
+                    "region": "us",
+                    "folder": None,
+                    "api_base_url": "https://api.cloudinary.com",
+                },
+                credentials={
+                    "api_key": f"{name}-key",
+                    "api_secret": f"{name}-secret-value",
+                },
+            )
+
+        first = media_storage("images", "d" * 32, "images-cloud")
+        second = media_storage("videos", "e" * 32, "videos-cloud")
+        rows = [(self.association(first), first), (self.association(second), second)]
+        db = SimpleNamespace(
+            execute=AsyncMock(return_value=SimpleNamespace(all=lambda: rows))
+        )
+
+        runtime = await self.service.runtime(
+            SimpleNamespace(project_id="project-id", environment_id="prod"), db
+        )
+
+        self.assertNotIn("CLOUDINARY_URL", runtime.environment)
+        self.assertIn("DEVPUSH_MEDIA_IMAGES_CLOUD_NAME", runtime.environment)
+        self.assertIn("DEVPUSH_MEDIA_VIDEOS_CLOUD_NAME", runtime.environment)
 
     async def test_runtime_rejects_matching_storage_that_is_not_ready(self):
         storage = self.storage()

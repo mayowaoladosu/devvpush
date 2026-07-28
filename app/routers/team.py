@@ -58,6 +58,12 @@ from forms.storage import (
     StorageProjectRemoveForm,
     StorageQueryForm,
     ObjectStorageConnectionForm,
+    MediaProviderConnectionForm,
+)
+from services.media_provider import (
+    MediaProviderConfigurationError,
+    MediaProviderConnectionError,
+    MediaProviderService,
 )
 from services.object_storage import (
     ObjectStorageConfigurationError,
@@ -219,6 +225,10 @@ async def team_storage(
                 object_config, object_credentials = form.object_values()
                 storage.config = object_config.as_dict()
                 storage.credentials = object_credentials.as_dict()
+            elif storage.type == "media":
+                media_config, media_credentials = form.media_values()
+                storage.config = media_config.as_dict()
+                storage.credentials = media_credentials.as_dict()
             db.add(storage)
             await db.commit()
             try:
@@ -261,7 +271,7 @@ async def team_storage(
 
     per_page = 25
 
-    allowed_types = {"database", "volume", "object"}
+    allowed_types = {"database", "volume", "object", "media"}
     storage_type = storage_type if storage_type in allowed_types else None
 
     query = select(Storage).where(
@@ -363,6 +373,8 @@ async def team_storage_settings(
     reset_form: Any = await StorageResetForm.from_formdata(request)
     object_connection_form = None
     object_access_key_hint = None
+    media_connection_form = None
+    media_api_key_hint = None
     if storage.type == "object":
         object_connection_form = await ObjectStorageConnectionForm.from_formdata(
             request,
@@ -378,6 +390,17 @@ async def team_storage_settings(
             },
         )
         object_access_key_hint = ObjectStorageService.access_key_hint(storage)
+    elif storage.type == "media":
+        media_connection_form = await MediaProviderConnectionForm.from_formdata(
+            request,
+            storage=storage,
+            data={
+                "cloud_name": storage.config.get("cloud_name"),
+                "cloudinary_region": storage.config.get("region", "us"),
+                "media_folder": storage.config.get("folder"),
+            },
+        )
+        media_api_key_hint = MediaProviderService.api_key_hint(storage)
     storage_id = storage.id
 
     if request.method == "POST" and fragment == "object_connection":
@@ -440,6 +463,69 @@ async def team_storage_settings(
                 flash(
                     request,
                     _("Object storage connection verified and saved."),
+                    "success",
+                )
+                return RedirectResponse(url=request.url.path, status_code=303)
+
+    if request.method == "POST" and fragment == "media_connection":
+        if not is_admin:
+            flash(
+                request,
+                _("Only team owners and admins can update media credentials."),
+                "warning",
+            )
+        elif media_connection_form and await media_connection_form.validate_on_submit():
+            try:
+                config, credentials = media_connection_form.values()
+                media_provider = MediaProviderService(settings)
+                await media_provider.verify(config, credentials)
+                locked_storage = (
+                    await db.execute(
+                        select(Storage)
+                        .where(
+                            Storage.id == storage_id,
+                            Storage.type == "media",
+                            Storage.status != "deleted",
+                        )
+                        .with_for_update()
+                    )
+                ).scalar_one_or_none()
+                if not locked_storage:
+                    raise MediaProviderConnectionError(
+                        "Media provider connection changed during verification."
+                    )
+                media_provider.configure(locked_storage, config, credentials)
+                locked_storage.status = "active"
+                locked_storage.error = None
+                locked_storage.updated_at = utc_now()
+                await db.commit()
+                logger.info(
+                    "Media provider connection verified: storage_id=%s user_id=%s provider=%s",
+                    storage_id,
+                    current_user.id,
+                    config.provider,
+                )
+            except (
+                MediaProviderConfigurationError,
+                MediaProviderConnectionError,
+            ) as exc:
+                media_connection_form.cloudinary_api_secret.errors.append(
+                    _(str(exc))
+                )
+            except Exception as exc:
+                await db.rollback()
+                logger.error(
+                    "Failed to update media provider %s: %s",
+                    storage_id,
+                    exc.__class__.__name__,
+                )
+                media_connection_form.cloudinary_api_secret.errors.append(
+                    _("Media provider connection could not be saved.")
+                )
+            else:
+                flash(
+                    request,
+                    _("Media provider connection verified and saved."),
                     "success",
                 )
                 return RedirectResponse(url=request.url.path, status_code=303)
@@ -896,6 +982,8 @@ async def team_storage_settings(
             "reset_form": reset_form,
             "object_connection_form": object_connection_form,
             "object_access_key_hint": object_access_key_hint,
+            "media_connection_form": media_connection_form,
+            "media_api_key_hint": media_api_key_hint,
             "associations": associations,
             "association_form": association_form,
             "remove_association_form": remove_association_form,
