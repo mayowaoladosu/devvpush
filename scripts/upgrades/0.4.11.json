@@ -1,0 +1,4 @@
+{
+  "components": "app,worker-jobs,worker-monitor,metrics-exporter",
+  "reason": "Add authenticated remote deployment nodes and federated metrics"
+}

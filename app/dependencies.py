@@ -427,7 +427,10 @@ async def get_deployment_by_id(
 ) -> Deployment:
     result = await db.execute(
         select(Deployment)
-        .options(selectinload(Deployment.aliases))
+        .options(
+            selectinload(Deployment.aliases),
+            selectinload(Deployment.node),
+        )
         .where(Deployment.id == deployment_id)
         .limit(1)
     )

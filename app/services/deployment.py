@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import joinedload
 from redis.asyncio import Redis
 from arq.connections import ArqRedis
 from arq.jobs import Job, JobStatus
@@ -17,6 +18,8 @@ from utils.environment import get_environment_for_branch
 from config import Settings, get_settings
 from services.registry import RegistryService
 from services.deployment_diagnostics import DeploymentDiagnosticService
+from services.deployment_nodes import DeploymentNodeService
+from services.node_runtime import deployment_runtime_client
 from services.storage import RuntimeStorage, StorageService
 
 logger = logging.getLogger(__name__)
@@ -335,6 +338,7 @@ class DeploymentService:
 
         result = await db.execute(
             select(Alias)
+            .options(joinedload(Alias.deployment).joinedload(Deployment.node))
             .join(Deployment, Alias.deployment_id == Deployment.id)
             .filter(
                 Deployment.project_id == project.id,
@@ -351,8 +355,30 @@ class DeploymentService:
         )
         domains = domains_result.scalars().all()
 
+        remote_where = [
+            Deployment.project_id == project.id,
+            Deployment.node_id.isnot(None),
+            Deployment.runtime_url.isnot(None),
+            Deployment.container_status == "running",
+        ]
+        if include_ids:
+            remote_where.append(
+                or_(
+                    Deployment.conclusion == "succeeded",
+                    Deployment.id.in_(list(include_ids)),
+                )
+            )
+        else:
+            remote_where.append(Deployment.conclusion == "succeeded")
+        remote_result = await db.execute(
+            select(Deployment)
+            .options(joinedload(Deployment.node))
+            .where(*remote_where)
+        )
+        remote_deployments = list(remote_result.scalars().all())
+
         # Remove config if no aliases or domains
-        if not aliases and not domains and os.path.exists(path):
+        if not aliases and not domains and not remote_deployments and os.path.exists(path):
             os.remove(path)
             return
 
@@ -360,11 +386,39 @@ class DeploymentService:
         services = {}
         middlewares = {}
 
+        def service_for(deployment: Deployment) -> str:
+            if not deployment.node_id:
+                return f"deployment-{deployment.id}@docker"
+            if not deployment.node:
+                raise ValueError("Remote deployment node is unavailable.")
+            service_name = f"deployment-{deployment.id}"
+            runtime_url = DeploymentNodeService.validate_runtime_url(
+                deployment.node, deployment.runtime_url
+            )
+            services[service_name] = {
+                "loadBalancer": {"servers": [{"url": runtime_url}]}
+            }
+            return service_name
+
+        for remote_deployment in remote_deployments:
+            service_name = service_for(remote_deployment)
+            router_config = {
+                "rule": f"Host(`{remote_deployment.hostname}`)",
+                "service": service_name,
+                "priority": 10,
+                "entryPoints": ["web", "websecure"]
+                if settings.url_scheme == "https"
+                else ["web"],
+            }
+            if settings.url_scheme == "https":
+                router_config["tls"] = {"certResolver": "le"}
+            routers[f"router-deployment-{remote_deployment.id}"] = router_config
+
         # Aliases
         for a in aliases:
             router_config = {
                 "rule": f"Host(`{a.subdomain}.{settings.deploy_domain}`)",
-                "service": f"deployment-{a.deployment_id}@docker",
+                "service": service_for(a.deployment),
                 "entryPoints": ["web", "websecure"]
                 if settings.url_scheme == "https"
                 else ["web"],
@@ -390,7 +444,7 @@ class DeploymentService:
             if domain.type == "route":
                 router_config = {
                     "rule": f"Host(`{domain.hostname}`)",
-                    "service": f"deployment-{env_alias.deployment_id}@docker",
+                    "service": service_for(env_alias.deployment),
                     "entryPoints": ["web", "websecure"]
                     if settings.url_scheme == "https"
                     else ["web"],
@@ -524,6 +578,12 @@ class DeploymentService:
         if provider_event_id:
             commit_meta["provider_event_id"] = provider_event_id[:255]
 
+        node = await DeploymentNodeService(get_settings()).select_node(
+            db,
+            project,
+            environment.get("id", ""),
+        )
+
         deployment = Deployment(
             project=project,
             environment_id=environment.get("id", ""),
@@ -532,6 +592,7 @@ class DeploymentService:
             commit_meta=commit_meta,
             image=runner_image,
             trigger=trigger,
+            node=node,
             created_by_user_id=current_user.id
             if trigger == "user" and current_user
             else None,
@@ -558,7 +619,8 @@ class DeploymentService:
 
         logger.info(
             f"Deployment {deployment.id} created for "
-            f"project {project.name} ({project.id}) to environment {environment.get('name')} ({environment.get('id')})"
+            f"project {project.name} ({project.id}) to environment {environment.get('name')} ({environment.get('id')}) "
+            f"on {'node ' + node.name if node else 'the primary node'}"
         )
 
         return deployment
@@ -825,10 +887,19 @@ class DeploymentService:
         }:
             return
         try:
-            async with aiodocker.Docker(
-                url=get_settings().docker_host
+            runtime_deployment = (
+                await db.execute(
+                    select(Deployment)
+                    .options(joinedload(Deployment.node))
+                    .where(Deployment.id == deployment.id)
+                )
+            ).scalar_one()
+            async with deployment_runtime_client(
+                runtime_deployment, get_settings()
             ) as docker_client:
-                container = await docker_client.containers.get(deployment.container_id)
+                container = await docker_client.containers.get(
+                    runtime_deployment.container_id
+                )
                 try:
                     await container.stop()
                 except Exception:

@@ -6,6 +6,7 @@
 !.env.example
 !.env.dev.example
 !.env.prod.example
+!.env.node.example
 
 # Python
 __pycache__/

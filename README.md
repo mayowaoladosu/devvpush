@@ -20,6 +20,7 @@ An open-source and self-hostable alternative to Vercel, Render, Netlify and the 
 - **Environment management**: Multiple environments with branch mapping and encrypted environment variables.
 - **Real-time monitoring**: Live and searchable build and runtime logs.
 - **Resource monitoring**: Authenticated Prometheus-backed CPU, memory, network, disk I/O, and process dashboards per deployment.
+- **Remote deployment nodes**: Enroll authenticated Docker nodes, schedule by health and capacity, and keep routing, logs, and metrics in the central control plane.
 - **Durable failure diagnostics**: Database-backed worker heartbeats and watchdog recovery keep crashes, timeouts, queue loss, and Loki outages visible to users.
 - **Team collaboration**: Role-based access control with team invitations and permissions.
 - **Custom domains**: Support for custom domain and automatic Let's Encrypt SSL certificates.
@@ -139,6 +140,48 @@ An internal Prometheus instance scrapes every five seconds with bounded time and
 size retention. Neither Prometheus nor the exporter exposes a host port; users
 query history through the authenticated project Monitoring page.
 
+### Remote deployment nodes
+
+Superadmins can enroll additional Docker hosts from **Admin → Deployment
+nodes**. The control plane schedules eligible deployments onto the least-loaded
+healthy active node. A full, draining, or unhealthy node receives no new work;
+automatic placement falls back to the primary host. Deployments with local
+SQLite or volume attachments always stay on the primary host because those
+paths are machine-local. Object-storage and media-provider connections remain
+eligible for remote placement.
+
+On each remote host, clone this repository and create the agent environment:
+
+```bash
+mkdir -p data
+cp .env.node.example data/node-agent.env
+openssl rand -hex 32
+# Put the generated value in NODE_AGENT_TOKEN, then configure the runtime host,
+# Docker socket GID (`getent group docker | cut -d: -f3`), capacity, port range,
+# and TLS files in node-agent.env.
+docker compose --env-file data/node-agent.env -f compose/node-agent.yml up -d --build
+```
+
+The endpoint and bearer token entered during enrollment must match the agent.
+`NODE_AGENT_RUNTIME_HOST` must resolve from central Traefik and must exactly
+match the runtime host entered in Admin. In production, expose the agent control
+port over HTTPS only to the control plane, and allow the configured runtime port
+range only from central Traefik. Do not expose the remote Docker API. For a
+private control endpoint, set `DEPLOYMENT_NODE_ALLOW_PRIVATE_ENDPOINTS=true` on
+the control plane; insecure HTTP endpoints additionally require the explicit
+`DEPLOYMENT_NODE_ALLOW_INSECURE_ENDPOINTS=true` opt-in.
+
+The agent is a non-root, read-only, capability-dropped service with a constrained
+API rather than a remote Docker proxy. It validates container ownership, image
+names, runtime ports, cache paths, and built-image labels. Zero-config images are
+pulled by the node. Dockerfile images are built once by central rootless
+BuildKit, exported with a size bound, streamed to the selected node, and checked
+before use. Central Traefik routes to the enrolled runtime address; the monitor
+and metrics exporter collect authenticated remote logs, health, and resource
+data. Draining preserves existing traffic, and deletion fails closed until all
+retained deployment containers have been removed and the node inventory is
+empty.
+
 Persistent storage is owned by a team and connected to projects for all or
 selected environments. Connections may use the generated `/data/...` path or a
 validated custom container directory such as `/app/data`. The same host-backed
@@ -254,6 +297,11 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for codebase structure.
 | `OBJECT_STORAGE_ALLOW_INSECURE_ENDPOINTS` | Permit HTTP rather than HTTPS for operator-trusted S3-compatible endpoints. Default: `false`.                                      |
 | `OBJECT_STORAGE_ALLOWED_ENDPOINT_SUFFIXES` | Comma-separated trusted DNS suffixes permitted for custom S3-compatible endpoints in production. Default: empty.                  |
 | `CLOUDINARY_API_BASE_URL`            | Development-only Cloudinary-compatible test endpoint override. Production always uses the selected official regional endpoint.             |
+| `DEPLOYMENT_NODE_ALLOW_PRIVATE_ENDPOINTS` | Permit operator-trusted private DNS/IP targets for node-agent control endpoints. Default: `false`.                                  |
+| `DEPLOYMENT_NODE_ALLOW_INSECURE_ENDPOINTS` | Permit HTTP rather than HTTPS for operator-trusted node-agent control endpoints. Default: `false`.                                  |
+| `DEPLOYMENT_NODE_HEALTH_INTERVAL_SECONDS` | Interval between node health refreshes. Default: `10`.                                                                                 |
+| `DEPLOYMENT_NODE_REQUEST_TIMEOUT_SECONDS` | Timeout for authenticated node-agent requests. Default: `15`.                                                                          |
+| `DEPLOYMENT_NODE_TARGETS_FILE`       | Generated internal target file shared with the metrics exporter. Default: `<DATA_DIR>/nodes/targets.json`.                              |
 | `BUILDKIT_HOST`                     | Rootless BuildKit socket. Default: `unix:///run/buildkit/buildkitd.sock`.                                                               |
 | `BUILDKIT_INTERNAL_SUBNET`          | Private internal build network. Default: `10.250.0.0/24`.                                                                                |
 | `BUILDKIT_PROXY_IP`                 | Filtered-egress proxy address inside that subnet. Default: `10.250.0.2`.                                                                 |

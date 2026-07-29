@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Request, Depends, Query
 from starlette.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import func, select, or_
 from arq.connections import ArqRedis
 from pathlib import Path
 
@@ -21,7 +21,7 @@ from dependencies import (
     get_queue,
 )
 from db import get_db
-from models import User, Allowlist
+from models import Allowlist, Deployment, DeploymentNode, User, utc_now
 from utils.pagination import paginate
 from services.registry import RegistryService
 from forms.admin import (
@@ -33,6 +33,14 @@ from forms.admin import (
     RegistryUpdateForm,
     RunnerToggleForm,
     PresetToggleForm,
+    DeploymentNodeActionForm,
+    DeploymentNodeForm,
+)
+from services.deployment_nodes import (
+    DeploymentNodeConfigurationError,
+    DeploymentNodeConnectionError,
+    DeploymentNodeSafetyError,
+    DeploymentNodeService,
 )
 
 logger = logging.getLogger(__name__)
@@ -100,6 +108,35 @@ async def get_users_pagination(
     return await paginate(db, users_query, users_page, USERS_PER_PAGE)
 
 
+async def get_deployment_nodes(db: AsyncSession):
+    nodes = list(
+        (
+            await db.execute(
+                select(DeploymentNode)
+                .where(DeploymentNode.status != "deleted")
+                .order_by(DeploymentNode.name.asc())
+            )
+        ).scalars()
+    )
+    counts = dict(
+        (
+            await db.execute(
+                select(Deployment.node_id, func.count(Deployment.id))
+                .where(
+                    Deployment.node_id.isnot(None),
+                    Deployment.container_id.isnot(None),
+                    or_(
+                        Deployment.container_status.is_(None),
+                        Deployment.container_status != "removed",
+                    ),
+                )
+                .group_by(Deployment.node_id)
+            )
+        ).all()
+    )
+    return nodes, {node_id: int(count) for node_id, count in counts.items()}
+
+
 @router.api_route("", methods=["GET", "POST"], name="admin_settings")
 async def admin_settings(
     request: Request,
@@ -127,6 +164,144 @@ async def admin_settings(
     preset_set_form = await PresetToggleForm.from_formdata(request)
     registry_image_form = await RegistryImageActionForm.from_formdata(request)
     registry_update_form = await RegistryUpdateForm.from_formdata(request)
+    node_action_form = await DeploymentNodeActionForm.from_formdata(request)
+    node_service = DeploymentNodeService(settings)
+    node_form = await DeploymentNodeForm.from_formdata(
+        request,
+        data={"region": "global", "max_deployments": 20},
+    )
+
+    # Remote deployment nodes
+    if fragment == "nodes":
+        form_data = await request.form() if request.method == "POST" else {}
+        target_node = None
+        target_node_id = str(form_data.get("node_id") or "")
+        if target_node_id:
+            target_node = await db.get(DeploymentNode, target_node_id)
+        node_form = await DeploymentNodeForm.from_formdata(
+            request,
+            node=target_node,
+            data=(
+                {
+                    "node_id": target_node.id,
+                    "name": target_node.name,
+                    "endpoint_url": target_node.endpoint_url,
+                    "runtime_host": target_node.runtime_host,
+                    "region": target_node.region,
+                    "max_deployments": target_node.max_deployments,
+                }
+                if target_node
+                else {
+                    "region": "global",
+                    "max_deployments": 20,
+                }
+            ),
+        )
+        if request.method == "POST" and str(form_data.get("action") or ""):
+            if await node_action_form.validate_on_submit() and target_node:
+                action = node_action_form.action.data
+                try:
+                    if action == "verify":
+                        healthy = await node_service.refresh_health(db, target_node)
+                        flash(
+                            request,
+                            _("Node verified.")
+                            if healthy
+                            else _("Node verification failed."),
+                            "success" if healthy else "error",
+                        )
+                    elif action == "drain":
+                        target_node.status = "draining"
+                        target_node.updated_at = utc_now()
+                        await db.commit()
+                        flash(request, _("Node is draining."), "success")
+                    elif action == "activate":
+                        if not await node_service.refresh_health(db, target_node):
+                            raise DeploymentNodeConnectionError(
+                                "Node must be healthy before activation."
+                            )
+                        target_node.status = "active"
+                        target_node.updated_at = utc_now()
+                        await db.commit()
+                        flash(request, _("Node activated."), "success")
+                    elif action == "delete":
+                        if node_action_form.confirm.data != target_node.name:
+                            raise DeploymentNodeSafetyError(
+                                "Node name confirmation did not match."
+                            )
+                        await node_service.assert_deletable(db, target_node)
+                        target_node.status = "deleted"
+                        target_node.healthy = False
+                        target_node.token = None
+                        target_node.updated_at = utc_now()
+                        await db.commit()
+                        flash(request, _("Node deleted."), "success")
+                    else:
+                        raise DeploymentNodeConfigurationError(
+                            "Node action is invalid."
+                        )
+                    await node_service.write_targets(db)
+                except (
+                    DeploymentNodeConfigurationError,
+                    DeploymentNodeConnectionError,
+                    DeploymentNodeSafetyError,
+                ) as exc:
+                    await db.rollback()
+                    flash(request, _(str(exc)), "error")
+            else:
+                flash(request, _("Node action is invalid."), "error")
+        elif request.method == "POST" and await node_form.validate_on_submit():
+            try:
+                config, token = node_form.values()
+                duplicate_query = select(DeploymentNode.id).where(
+                    func.lower(DeploymentNode.name) == config.name.lower(),
+                    DeploymentNode.status != "deleted",
+                )
+                if target_node:
+                    duplicate_query = duplicate_query.where(
+                        DeploymentNode.id != target_node.id
+                    )
+                if (await db.execute(duplicate_query)).scalar_one_or_none():
+                    raise DeploymentNodeConfigurationError(
+                        "A deployment node with this name already exists."
+                    )
+                health = await node_service.verify(config, token)
+                node = target_node or DeploymentNode(
+                    created_by_user_id=current_user.id
+                )
+                node_service.configure(node, config, token, health)
+                if not target_node:
+                    db.add(node)
+                await db.commit()
+                await node_service.write_targets(db)
+                flash(
+                    request,
+                    _("Deployment node verified and saved."),
+                    "success",
+                )
+                node_form = await DeploymentNodeForm.from_formdata(
+                    request,
+                    data={"region": "global", "max_deployments": 20},
+                )
+            except (
+                DeploymentNodeConfigurationError,
+                DeploymentNodeConnectionError,
+            ) as exc:
+                await db.rollback()
+                node_form.token.errors = [_(str(exc))]
+        nodes, node_deployment_counts = await get_deployment_nodes(db)
+        if request.headers.get("HX-Request"):
+            return TemplateResponse(
+                request=request,
+                name="admin/partials/_settings-nodes.html",
+                context={
+                    "current_user": current_user,
+                    "nodes": nodes,
+                    "node_deployment_counts": node_deployment_counts,
+                    "node_form": node_form,
+                    "node_action_form": node_action_form,
+                },
+            )
 
     registry_service = RegistryService(Path(settings.data_dir) / "registry")
     registry_state = registry_service.state
@@ -597,6 +772,7 @@ async def admin_settings(
         db, allowlist_page, allowlist_search
     )
     users_pagination = await get_users_pagination(db, users_page, users_search)
+    nodes, node_deployment_counts = await get_deployment_nodes(db)
     overrides_mtime = (
         registry_service.overrides_path.stat().st_mtime
         if registry_service.overrides_path.exists()
@@ -630,5 +806,9 @@ async def admin_settings(
             "preset_set_form": preset_set_form,
             "registry_state": registry_state,
             "registry_overrides_updated_at": registry_overrides_updated_at,
+            "nodes": nodes,
+            "node_deployment_counts": node_deployment_counts,
+            "node_form": node_form,
+            "node_action_form": node_action_form,
         },
     )

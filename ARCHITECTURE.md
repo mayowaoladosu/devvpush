@@ -29,6 +29,7 @@ This document describes the high‑level architecture of /dev/push, how the main
 - **Persistent storage**: Team-owned SQLite databases and volume directories connect to selected project environments. `StorageService` validates container paths, prevents overlapping mounts, resolves deterministic host paths, and blocks destructive actions while any retained container references a resource.
 - **Object storage**: Team-owned S3/R2-compatible connections store only non-secret provider metadata in JSON; Fernet-encrypted credentials are decrypted by the jobs worker and injected into selected runtime environments after all build work completes.
 - **Media providers**: Team-owned Cloudinary connections verify temporary upload/read/delete access, encrypt API credentials, and inject namespaced media configuration only when selected runtime containers are created.
+- **Remote deployment nodes**: Superadmins enroll authenticated constrained agents. Eligible deployments are assigned to the least-loaded healthy active node; local SQLite/volume attachments pin placement to the primary host. Central Traefik, monitoring, and metrics continue to span every node.
 - **BuildKit**: Only the jobs worker can reach the rootless daemon over a group-restricted Unix socket. BuildKit has persistent layer cache, a private internal network, a read-only root filesystem, bounded resources, and no host Docker socket or control-plane network membership. Public dependency traffic crosses a separate filtered-egress proxy.
 - **Framework detection**: Repository import reads one recursive Git tree and a bounded batch of manifests. The detector ranks every candidate application root, derives package-manager-aware commands, and returns a recommendation plus monorepo alternatives and evidence. Explicit Dockerfiles are associated with their application roots and take precedence while remaining editable.
 - **Reverse proxy**: We have Traefik sitting in front of both app and the deployed runner containers. All routing is done using Traefik labels, and we also maintain environment and branch aliases (e.g. `my-project-env-staging.devpush.app`) using Traefik config files.
@@ -38,8 +39,9 @@ This document describes the high‑level architecture of /dev/push, how the main
 - `app/`: The main FastAPI application (see README file).
 - `app/workers`: The workers (`jobs` and `monitor`)
 - `docker/`: Container definitions and entrypoint scripts for the app/workers and local development.
+- `node_agent/`: Authenticated, constrained Docker lifecycle protocol for remote deployment hosts.
 - `scripts/`: Helper scripts for local (macOS) and production environments
-- `compose/`: Container orchestration with Docker Compose. Files: `base.yml`, `override.yml`, `override.dev.yml`, and SSL provider-specific files (`ssl-default.yml`, `ssl-cloudflare.yml`, etc.).
+- `compose/`: Container orchestration with Docker Compose. The central stack uses `base.yml` plus an environment override; `node-agent.yml` installs a standalone remote node.
 
 Operational script notes:
 - `start.sh`, `stop.sh`, and `restart.sh` support component-scoped operations via `--components <csv>`.
@@ -81,6 +83,12 @@ flowchart TB
     RC[Runner Containers]
   end
 
+  subgraph Remote_Node
+    NA[Constrained Node Agent]
+    RD[Node-local Docker]
+    RRC[Remote Runner Containers]
+  end
+
   subgraph Build
     BK[Rootless BuildKit]
     EP[Filtered Egress Proxy]
@@ -104,6 +112,12 @@ flowchart TB
   BK -- public HTTP/S only --> EP
   M -- Docker API --> DP
   DP -- create/manage --> RC
+  W -- authenticated lifecycle and image archive --> NA
+  M -- authenticated inspect and logs --> NA
+  MX -- authenticated stats --> NA
+  NA -- constrained Docker API --> RD
+  RD -- create/manage --> RRC
+  T -- bounded runtime ports --> RRC
   RC -- runtime object API --> OBJ
   RC -- runtime media API --> MEDIA
   MX -- read-only stats --> DP
@@ -152,6 +166,17 @@ Notes:
 
 - `tecnativa/docker-socket-proxy` exposing an endpoint allowlist used by workers, Traefik, and Alloy.
 - Host `/build`, `/exec`, volume, and system-management endpoints are denied. The worker may load a completed BuildKit image but cannot invoke the host Docker builder.
+
+### Remote Deployment Nodes
+
+- `DeploymentNodeService` owns endpoint policy, enrollment verification, token encryption, health, capacity-aware placement, drain/activation, target generation, runtime-address validation, and deletion safety.
+- The node agent is the only service on a remote host that mounts its local Docker socket. Its bearer-authenticated protocol exposes only approved image, container, log, health, and metric operations; it is not a general Docker API tunnel.
+- The standalone Compose stack initializes the cache bind mount with the configured UID/GID, then runs the agent non-root with a read-only filesystem, no capabilities, no-new-privileges, and bounded CPU, memory, and PIDs.
+- `DOCKER_GID` must match the remote host Docker socket group; it grants the otherwise unprivileged agent access only to its node-local socket.
+- Central workers use a Docker-compatible adapter so local and remote lifecycle code share one contract. Remote origins are reconstructed and checked against the enrolled host and bounded port range before Traefik configuration is written.
+- Zero-config dependency caches live on the selected node. Dockerfile archives are exported by central rootless BuildKit and streamed to the agent with a hard size limit; loaded images must carry the expected deployment ownership label and pass runtime-image policy.
+- The monitor refreshes node health, probes remote runtimes, and synchronizes logs. The metrics exporter federates authenticated node metrics and attaches `node_id` to every remote series.
+- Draining prevents new placement without stopping retained containers. Node deletion requires both the database and live agent inventory to be empty and fails closed when the node cannot be verified.
 
 ### Rootless BuildKit
 
@@ -203,16 +228,21 @@ Notes:
   - Webhook: GitHub -> `/api/github/webhook` (verify signature and delivery ID, resolve project) -> lock the environment -> deduplicate the delivery -> create/enqueue the replacement -> mark older active webhook deployments skipped -> abort and clean them. Partial scheduling failures return `500`; GitHub redelivery safely reuses completed scheduling work.
   - Manual: user selects commit/env -> lock the environment -> create DB record -> enqueue `start_deployment`. Manual work does not participate in webhook supersession.
 
+1a) Placement
+  - Local SQLite or volume attachments pin the environment to the primary host.
+  - Otherwise select the least-loaded healthy active node below its configured capacity. Automatic placement uses the primary host when no remote node is eligible.
+  - Persist the node assignment before enqueueing so every lifecycle, cancellation, cleanup, route, log, and metric operation addresses the same runtime.
+
 2) `start_deployment`
-  - Zero-config: create a language runner, clone the selected commit, run optional build/pre-deploy commands, then start the app.
+  - Zero-config: ensure the language image exists on the selected runtime, create a runner, clone the selected commit, run optional build/pre-deploy commands, then start the app.
   - For cache-aware zero-config runners, mount the selected dependency-cache generation at `/cache`, emit hit/miss metadata, and mark it reusable only after the build command succeeds.
-  - Dockerfile: download the immutable GitHub archive, safely extract the selected root, stream the context to rootless BuildKit, export/load a managed image, then start its `CMD`/`ENTRYPOINT` without source credentials.
+  - Dockerfile: download the immutable GitHub archive, safely extract the selected root, stream the context to rootless BuildKit, then load the ownership-labeled managed image into the selected local or remote runtime and start its `CMD`/`ENTRYPOINT` without source credentials.
   - Apply runtime env vars, resource limits, Traefik labels, and JSON logging to either container type.
   - Resolve active storage for the selected environment, lock its rows through container creation, attach validated bind mounts, and label every storage ID.
   - Mark deployment `in_progress`, set `container_id=…`, emit Redis Stream update.
 
 3) Monitor
-  - Probe container IP on `devpush_runner:8000/`.
+  - Probe a local container on `devpush_runner:8000/` or the validated enrolled node runtime URL.
   - On ready -> enqueue `finalize_deployment`. On exit/error -> enqueue `fail_deployment`.
 
 4) Finalize:
@@ -235,6 +265,7 @@ erDiagram
   TEAM ||--o{ TEAM_MEMBER : has
   TEAM ||--o{ PROJECT : owns
   PROJECT ||--o{ DEPLOYMENT : has
+  DEPLOYMENT_NODE ||--o{ DEPLOYMENT : runs
   DEPLOYMENT ||--o{ ALIAS : exposes
   PROJECT ||--o{ DOMAIN : maps
   GITHUB_INSTALLATION ||--o{ PROJECT : authorizes
@@ -251,6 +282,7 @@ Notes:
 - `devpush_default`: public (Traefik, app, Loki).
 - `devpush_internal`: internal (DB, Redis, Docker proxy, Traefik file provider).
 - `devpush_runner`: runner network for deployed containers; Traefik and workers attach to route/probe.
+- Remote nodes expose only their authenticated control endpoint and configured runtime port range. Central Traefik must resolve the enrolled runtime host; node-local Docker remains unexposed.
 - `${DEVPUSH_VOLUME_PREFIX}_buildkit`: internal BuildKit/build-step network with no default egress route. It is not shared with app, database, Redis, Docker proxy, or runners.
 - `${DEVPUSH_VOLUME_PREFIX}_buildkit-egress`: outbound network used only by the filtered proxy.
 - Prometheus and `metrics-exporter` join only `devpush_internal`; neither has a host port or Traefik route.
@@ -263,6 +295,7 @@ Notes:
 - Metrics: runner Docker stats -> internal exporter -> Prometheus -> authenticated project Monitoring dashboard.
 - Status: Redis Streams power SSE for project and deployment updates.
 - Health: app `/health`; ARQ `--check`; Docker Compose healthchecks for services.
+- Node health: the monitor verifies authenticated agent protocol, Docker availability, cache writeability, capacity metadata, and enrolled runtime identity.
 
 ## Security
 
@@ -277,10 +310,11 @@ Notes:
 - Build secrets: GitHub and project secrets are not exposed to Dockerfile instructions or persisted in build context/cache.
 - Egress: builds can fetch public dependencies but cannot connect directly or through the proxy to control-plane/private, host, or cloud-metadata ranges.
 - Metrics: the exporter has no Docker socket and receives only scoped container lists plus read-only one-shot stats from the policy proxy; Prometheus and exporter endpoints remain internal.
+- Remote nodes: bearer tokens are encrypted in PostgreSQL and written only to a mode-`0600` internal target file. Production control endpoints require HTTPS and public DNS by default; private or insecure endpoints require separate operator opt-ins. Agent-reported runtime origins are never trusted without enrolled host, scheme, and port validation.
 
 ## Scaling
 
-- App and workers can scale horizontally behind Traefik.
+- App and workers can scale horizontally behind Traefik; remote runtime capacity scales by enrolling and activating additional nodes.
 - DB and Redis can be sized independently; cleanup tasks keep unused containers down.
 
 ## Implementation Notes

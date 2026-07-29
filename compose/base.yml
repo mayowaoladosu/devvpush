@@ -131,7 +131,10 @@ services:
       - internal
     environment:
       DOCKER_HOST: tcp://docker-proxy:2375
+      NODE_TARGETS_FILE: /data/nodes/targets.json
       PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ${DATA_DIR:-../data}:/data:ro
     read_only: true
     security_opt:
       - no-new-privileges:true

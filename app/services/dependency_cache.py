@@ -84,7 +84,9 @@ class DependencyCacheService:
         )
         return values
 
-    def prepare(self, deployment) -> DependencyCacheMount | None:
+    def prepare(
+        self, deployment, *, create_local: bool = True
+    ) -> DependencyCacheMount | None:
         config = deployment.config or {}
         if not self.is_enabled(config):
             return None
@@ -114,14 +116,15 @@ class DependencyCacheService:
         )
         runtime_path = Path(self.settings.data_dir) / relative
         host_path = Path(self.settings.host_data_dir or self.settings.data_dir) / relative
-        warm = (runtime_path / _READY_MARKER).is_file()
+        warm = create_local and (runtime_path / _READY_MARKER).is_file()
 
-        try:
-            runtime_path.mkdir(parents=True, exist_ok=True, mode=0o700)
-        except OSError as exc:
-            raise DependencyCacheError(
-                "Dependency cache directory could not be prepared."
-            ) from exc
+        if create_local:
+            try:
+                runtime_path.mkdir(parents=True, exist_ok=True, mode=0o700)
+            except OSError as exc:
+                raise DependencyCacheError(
+                    "Dependency cache directory could not be prepared."
+                ) from exc
 
         return DependencyCacheMount(
             source=str(host_path).replace("\\", "/"),

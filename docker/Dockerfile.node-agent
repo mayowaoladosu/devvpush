@@ -1,0 +1,32 @@
+FROM python:3.13-slim
+
+ARG AGENT_UID=1000
+ARG AGENT_GID=1000
+
+RUN if ! getent group "${AGENT_GID}" >/dev/null; then addgroup --gid "${AGENT_GID}" nodeagent; fi \
+    && adduser --uid "${AGENT_UID}" --gid "${AGENT_GID}" --system --home /agent nodeagent \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /agent
+ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+ENV UV_CACHE_DIR=/tmp/uv
+ENV HOME=/agent
+ENV PYTHONPATH=/agent
+
+COPY app/pyproject.toml app/uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project \
+    && rm -rf /tmp/uv
+
+COPY --chown=${AGENT_UID}:${AGENT_GID} app/services/metrics_exporter.py /agent/services/metrics_exporter.py
+COPY --chown=${AGENT_UID}:${AGENT_GID} app/services/dockerfile_builder.py /agent/services/dockerfile_builder.py
+COPY --chown=${AGENT_UID}:${AGENT_GID} node_agent/ /agent/
+COPY --chown=${AGENT_UID}:${AGENT_GID} --chmod=755 docker/entrypoint.node-agent.sh /entrypoint.node-agent.sh
+
+USER nodeagent
+EXPOSE 8787
+
+ENTRYPOINT ["/entrypoint.node-agent.sh"]

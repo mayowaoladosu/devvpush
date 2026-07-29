@@ -1,0 +1,73 @@
+services:
+  node-data-init:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node-agent
+      args:
+        AGENT_UID: ${NODE_AGENT_UID:-1000}
+        AGENT_GID: ${NODE_AGENT_GID:-1000}
+    user: "0:0"
+    network_mode: none
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        install -d -o ${NODE_AGENT_UID:-1000} -g ${NODE_AGENT_GID:-1000} -m 0700 /data/cache
+        install -d -o ${NODE_AGENT_UID:-1000} -g ${NODE_AGENT_GID:-1000} -m 0700 /data/cache/dependencies
+        chown -R ${NODE_AGENT_UID:-1000}:${NODE_AGENT_GID:-1000} /data/cache
+    restart: "no"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    cap_add: ["CHOWN", "DAC_OVERRIDE", "FOWNER"]
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 32
+    volumes:
+      - ${NODE_AGENT_DATA_DIR:-/var/lib/devpush-node}:/data
+
+  node-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.node-agent
+      args:
+        AGENT_UID: ${NODE_AGENT_UID:-1000}
+        AGENT_GID: ${NODE_AGENT_GID:-1000}
+    restart: unless-stopped
+    depends_on:
+      node-data-init:
+        condition: service_completed_successfully
+    ports:
+      - "${NODE_AGENT_BIND_IP:-0.0.0.0}:${NODE_AGENT_PORT:-8787}:8787"
+    env_file:
+      - ${NODE_AGENT_ENV_FILE:-../data/node-agent.env}
+    environment:
+      NODE_AGENT_DATA_DIR: /data
+      NODE_AGENT_HOST_DATA_DIR: ${NODE_AGENT_DATA_DIR:-/var/lib/devpush-node}
+      NODE_AGENT_DOCKER_SOCKET: /var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${NODE_AGENT_DATA_DIR:-/var/lib/devpush-node}:/data
+      - ${NODE_AGENT_TLS_DIR:-../data/node-tls}:/tls:ro
+    group_add:
+      - "${DOCKER_GID:-999}"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: ["ALL"]
+    mem_limit: ${NODE_AGENT_MEMORY_LIMIT:-256m}
+    cpus: ${NODE_AGENT_CPUS:-1.0}
+    pids_limit: 256
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=67108864,uid=${NODE_AGENT_UID:-1000},gid=${NODE_AGENT_GID:-1000}
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -fk -H \"Authorization: Bearer $$NODE_AGENT_TOKEN\" $${NODE_AGENT_HEALTH_URL:-http://localhost:8787/v1/health} >/dev/null",
+        ]
+      interval: 30s
+      start_interval: 2s
+      timeout: 5s
+      retries: 3
+      start_period: 30s

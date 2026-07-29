@@ -10,11 +10,13 @@ docker/
 !docker/entrypoint.worker-jobs.dev.sh
 !docker/entrypoint.worker-monitor.sh
 !docker/entrypoint.worker-monitor.dev.sh
+!docker/entrypoint.node-agent.sh
 
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
+node_agent/tests/
 
 # Virtual environments
 venv/

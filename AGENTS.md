@@ -166,6 +166,7 @@ These guidelines apply to every script under `scripts/` (install/start/stop/rest
 10. **Persistent storage**: Keep path, environment, conflict, and mounted-container rules behind `StorageService`, and lifecycle queue IDs behind `StorageJobs`. Users may configure only validated container paths; host paths must remain deterministic below `DATA_DIR/storage`. Resolve attachments with project/association/storage locks immediately before container creation, label `devpush.storage_ids`, and add the service GID. Never reset/delete on an unverifiable Docker state or while any current, rollback, stopped, or retained container references the resource. The monitor must reconcile committed pending/resetting/deleted transitions using short-lived database sessions.
 11. **Object storage**: Keep provider normalization, DNS/HTTPS policy, SigV4 verification, credential encryption/runtime shaping, and namespace rules behind `ObjectStorageService`. Never persist credentials in `Storage.config`, include secret values in logs/errors/templates, send them to BuildKit, or delete remote buckets/objects during connection deletion. Namespaced `DEVPUSH_OBJECT_*` values override project variables; conventional AWS aliases must respect explicit project values. Verify rotations before the row-locked encrypted update.
 12. **Media providers**: Keep Cloudinary region/endpoint normalization, upload/read/delete verification, encrypted credentials, runtime shaping, and namespace rules behind `MediaProviderService`. Never persist API secrets in `Storage.config`, include them in logs/errors/templates, send them to BuildKit, or delete customer assets during connection deletion. Namespaced `DEVPUSH_MEDIA_*` values override project variables; conventional Cloudinary aliases must respect explicit project values. Verify rotations before the row-locked encrypted update.
+13. **Remote nodes**: Keep enrollment, endpoint policy, health, scheduling, drain/delete safety, target generation, and runtime-origin validation behind `DeploymentNodeService`; keep remote Docker translation behind `NodeDockerClient`. Never expose a raw remote Docker API, trust an agent-provided origin without enrolled host/port validation, place local SQLite/volume attachments remotely, write bearer tokens to logs/templates, or send project/GitHub secrets to Dockerfile builds. Node deletion must fail closed against both database ownership and live agent inventory.
 
 ### Code Style
 
@@ -218,6 +219,7 @@ These guidelines apply to every script under `scripts/` (install/start/stop/rest
 9. **buildkitd**: Rootless Dockerfile builder reached only by `worker-jobs` over a Unix socket
 10. **metrics-exporter**: Internal read-only Docker stats exporter for labeled deployment containers
 11. **prometheus**: Internal bounded-retention resource metrics store queried only by the app
+12. **node-agent**: Standalone remote-host service with a constrained authenticated Docker lifecycle protocol (`compose/node-agent.yml`)
 
 Dockerfile builds must stay behind `services/dockerfile_builder.py`. Never call
 the host Docker `/build` endpoint, pass GitHub/project secrets as build args, or

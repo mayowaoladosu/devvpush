@@ -11,7 +11,7 @@
 - [x] **Cancel and skip**: Allow users to cancel ongoing deployments, skip deployments on rapid commits.
 - [x] **Dependency caching**: Add caching for dependencies (i.e. volumes for .venv, node_modules, etc) per project.
 - [x] **Better error logging**: improve error logging for deployments (e.g., when errors aren't captured by Loki, like a worker-jobs crash).
-- [ ] **Remote nodes**: Ability to add multiple remote nodes to deploy apps.
+- [x] **Remote nodes**: Authenticated multi-node placement with capacity, drain safety, central routing, logs, metrics, and Dockerfile image transfer.
 - [ ] **Deployment settings**: Provide more granular rules for deployments (triggers, # concurrent events, commit author, etc).
 - [ ] **Rate limiting**: Add Traefik protections for auth + sensitive endpoints (env-flagged).
 - [ ] **Migrate away from ARQ**: ARQ is deprecated, move over to https://github.com/taskiq-python/taskiq or similar.

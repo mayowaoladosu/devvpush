@@ -147,6 +147,12 @@
         </span>
       </li>
     {% endif %}
+    <li>
+      <span class="badge-outline" data-tooltip="{{ _('Deployment node') }}">
+        {% include "icons/hard-drive.svg" %}
+        {{ deployment.node.name if deployment.node else _('Primary node') }}
+      </span>
+    </li>
   </ul>
 
   <ul class="flex gap-x-6 items-start">

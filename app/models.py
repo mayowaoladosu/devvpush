@@ -769,6 +769,78 @@ class StorageProject(Base):
         return self.mount_path
 
 
+class DeploymentNode(Base):
+    __tablename__: str = "deployment_node"
+
+    id: Mapped[str] = mapped_column(
+        String(32), primary_key=True, default=lambda: token_hex(16)
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    endpoint_url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    runtime_host: Mapped[str] = mapped_column(String(255), nullable=False)
+    region: Mapped[str] = mapped_column(String(63), nullable=False, default="global")
+    max_deployments: Mapped[int] = mapped_column(nullable=False, default=20)
+    status: Mapped[str] = mapped_column(
+        SQLAEnum(
+            "active",
+            "draining",
+            "disabled",
+            "deleted",
+            name="deployment_node_status",
+        ),
+        nullable=False,
+        default="active",
+        index=True,
+    )
+    healthy: Mapped[bool] = mapped_column(nullable=False, default=False, index=True)
+    config: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    _token: Mapped[str | None] = mapped_column(
+        "token_encrypted", Text, nullable=True
+    )
+    error: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(nullable=True, index=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user.id", use_alter=True, ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        index=True, nullable=False, default=utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        index=True, nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    deployments: Mapped[list["Deployment"]] = relationship(back_populates="node")
+    created_by_user: Mapped[User | None] = relationship(
+        foreign_keys=[created_by_user_id]
+    )
+
+    __table_args__ = (
+        Index(
+            "ix_deployment_node_name_lower",
+            func.lower(name),
+            unique=True,
+        ),
+    )
+
+    @property
+    def token(self) -> str:
+        if not self._token:
+            return ""
+        return get_fernet().decrypt(self._token.encode()).decode()
+
+    @token.setter
+    def token(self, value: str | None):
+        self._token = (
+            get_fernet().encrypt(str(value).encode()).decode() if value else None
+        )
+
+    @override
+    def __repr__(self):
+        return f"<DeploymentNode {self.name} ({self.status})>"
+
+
 class Deployment(Base):
     __tablename__: str = "deployment"
 
@@ -788,6 +860,12 @@ class Deployment(Base):
         JSON, nullable=False, default=dict
     )
     image: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    node_id: Mapped[str | None] = mapped_column(
+        ForeignKey("deployment_node.id", ondelete="RESTRICT"),
+        nullable=True,
+        index=True,
+    )
+    runtime_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     _env_vars: Mapped[str] = mapped_column("env_vars", Text, nullable=False, default="")
     job_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
     worker_job_id: Mapped[str | None] = mapped_column(
@@ -848,6 +926,7 @@ class Deployment(Base):
         cascade="all, delete-orphan",
         order_by="DeploymentDiagnostic.created_at",
     )
+    node: Mapped[DeploymentNode | None] = relationship(back_populates="deployments")
 
     def __init__(self, *args, project: "Project", environment_id: str, **kwargs):
         super().__init__(project=project, environment_id=environment_id, **kwargs)

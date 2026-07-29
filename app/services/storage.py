@@ -16,6 +16,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import Settings
 from models import Deployment, Project, Storage, StorageProject, utc_now
+from services.deployment_nodes import (
+    DeploymentNodeConnectionError,
+    DeploymentNodeService,
+)
 from services.media_provider import MediaProviderService
 from services.object_storage import ObjectStorageService
 
@@ -427,6 +431,15 @@ class StorageService:
                 containers = await asyncio.wait_for(
                     docker.containers.list(all=True), timeout=5
                 )
+            containers.extend(
+                await DeploymentNodeService(
+                    self.settings
+                ).remote_container_snapshots()
+            )
+        except DeploymentNodeConnectionError as exc:
+            raise StorageSafetyError(
+                "Could not verify whether storage is used on every deployment node. Restore node connectivity and try again."
+            ) from exc
         except Exception as exc:
             raise StorageSafetyError(
                 "Could not verify whether storage is mounted. Try again after Docker recovers."

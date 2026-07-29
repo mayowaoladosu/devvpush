@@ -8,23 +8,27 @@ import aiodocker
 import httpx
 from arq.connections import ArqRedis, RedisSettings, create_pool
 from sqlalchemy import exc, inspect, select
+from sqlalchemy.orm import joinedload
 
 from config import get_settings
 from db import AsyncSessionLocal
-from models import Deployment, Storage
+from models import Deployment, DeploymentNode, Storage
 from services.deployment import DeploymentService
 from services.deployment_diagnostics import DeploymentDiagnosticService
 from services.deployment_jobs import DeploymentJobs
+from services.deployment_nodes import DeploymentNodeService
 from services.deployment_reconciler import (
     DeploymentReconciler,
     DeploymentRecoveryIncident,
 )
+from services.loki import LokiService
+from services.node_runtime import deployment_runtime_client
 from services.storage_jobs import StorageJobs
 from workers.tasks.deployment import fail_deployment, finalize_deployment
 
 logger = logging.getLogger(__name__)
 
-deployment_probe_state = {}  # deployment_id -> {"container": container_obj, "probe_active": bool}
+deployment_probe_state = {}
 
 
 async def _recover_lifecycle_job(
@@ -98,6 +102,15 @@ async def _http_probe(ip: str, port: int, timeout: float = 5) -> bool:
         return False
 
 
+async def _http_probe_url(url: str, timeout: float = 5) -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            await client.get(url)
+            return True
+    except Exception:
+        return False
+
+
 async def _check_status(
     deployment: Deployment,
     docker_client: aiodocker.Docker,
@@ -108,41 +121,58 @@ async def _check_status(
     if deployment.status == "completed" or deployment.conclusion:
         return
 
-    if (
-        deployment.id in deployment_probe_state
-        and deployment_probe_state[deployment.id]["probe_active"]
-    ):
+    state = deployment_probe_state.setdefault(
+        deployment.id,
+        {
+            "probe_active": False,
+            "last_log_sync": 0.0,
+            "unavailable_count": 0,
+        },
+    )
+    if state["probe_active"]:
         return
 
     log_prefix = f"[DeployMonitor:{deployment.id}]"
 
-    if deployment.id not in deployment_probe_state:
-        try:
-            container = await docker_client.containers.get(deployment.container_id)
-            deployment_probe_state[deployment.id] = {
-                "container": container,
-                "probe_active": True,
-            }
-        except Exception as error:
-            await DeploymentJobs.enqueue_failure(
-                redis_pool,
-                deployment.id,
-                "deploy",
-                "Container stopped unexpectedly. Check the deployment logs for errors.",
-                code="container_unavailable",
-                source="monitor",
-                details={"error": error.__class__.__name__},
+    state["probe_active"] = True
+    try:
+        container = await docker_client.containers.get(deployment.container_id)
+    except Exception as error:
+        state["unavailable_count"] += 1
+        if deployment.node_id and state["unavailable_count"] < 3:
+            logger.warning(
+                "%s Remote node unavailable (%s/3); retrying.",
+                log_prefix,
+                state["unavailable_count"],
             )
+            state["probe_active"] = False
             return
-    else:
-        deployment_probe_state[deployment.id]["probe_active"] = True
-        container = deployment_probe_state[deployment.id]["container"]
+        await DeploymentJobs.enqueue_failure(
+            redis_pool,
+            deployment.id,
+            "deploy",
+            "Container stopped unexpectedly. Check the deployment logs for errors.",
+            code="container_unavailable",
+            source="monitor",
+            details={"error": error.__class__.__name__},
+        )
+        state["probe_active"] = False
+        return
+    state["unavailable_count"] = 0
 
     # Probe check
     try:
         logger.info(f"{log_prefix} Probing container {deployment.container_id}")
         container_info = await container.show()
         status = container_info["State"]["Status"]
+
+        if deployment.node_id and time.monotonic() - state["last_log_sync"] >= 5:
+            loki = LokiService()
+            try:
+                await loki.preserve_container_logs(container, deployment)
+            finally:
+                await loki.client.aclose()
+            state["last_log_sync"] = time.monotonic()
 
         created_at = (
             deployment.created_at.replace(tzinfo=timezone.utc)
@@ -201,9 +231,22 @@ async def _check_status(
             await _cleanup_deployment(deployment.id)
 
         elif status == "running":
-            networks = container_info.get("NetworkSettings", {}).get("Networks", {})
-            container_ip = networks.get("devpush_runner", {}).get("IPAddress")
-            if container_ip and await _http_probe(container_ip, 8000):
+            ready = False
+            if deployment.node_id and deployment.runtime_url and deployment.node:
+                try:
+                    runtime_url = DeploymentNodeService.validate_runtime_url(
+                        deployment.node, deployment.runtime_url
+                    )
+                except Exception:
+                    runtime_url = ""
+                ready = bool(runtime_url) and await _http_probe_url(runtime_url)
+            else:
+                networks = container_info.get("NetworkSettings", {}).get(
+                    "Networks", {}
+                )
+                container_ip = networks.get("devpush_runner", {}).get("IPAddress")
+                ready = bool(container_ip) and await _http_probe(container_ip, 8000)
+            if ready:
                 await DeploymentService.update_status(
                     db,
                     deployment,
@@ -242,14 +285,52 @@ async def _check_status_by_id(
     redis_pool: ArqRedis,
 ):
     async with AsyncSessionLocal() as deployment_db:
-        deployment = await deployment_db.get(Deployment, deployment_id)
-        if deployment:
-            await _check_status(
-                deployment,
-                docker_client,
-                redis_pool,
-                deployment_db,
+        deployment = (
+            await deployment_db.execute(
+                select(Deployment)
+                .options(joinedload(Deployment.node))
+                .where(Deployment.id == deployment_id)
             )
+        ).scalar_one_or_none()
+        if deployment:
+            if deployment.node_id:
+                async with deployment_runtime_client(
+                    deployment, get_settings()
+                ) as runtime_client:
+                    await _check_status(
+                        deployment,
+                        runtime_client,
+                        redis_pool,
+                        deployment_db,
+                    )
+            else:
+                await _check_status(
+                    deployment,
+                    docker_client,
+                    redis_pool,
+                    deployment_db,
+                )
+
+
+async def _refresh_deployment_nodes() -> None:
+    service = DeploymentNodeService(get_settings())
+    async with AsyncSessionLocal() as node_db:
+        node_ids = list(
+            (
+                await node_db.execute(
+                    select(DeploymentNode.id).where(
+                        DeploymentNode.status.in_(["active", "draining"])
+                    )
+                )
+            ).scalars()
+        )
+    for node_id in node_ids:
+        async with AsyncSessionLocal() as node_db:
+            node = await node_db.get(DeploymentNode, node_id)
+            if node:
+                await service.refresh_health(node_db, node)
+    async with AsyncSessionLocal() as node_db:
+        await service.write_targets(node_db)
 
 
 async def _reconcile_storage_jobs(redis_pool: ArqRedis) -> None:
@@ -289,6 +370,7 @@ async def monitor():
     redis_pool = await create_pool(redis_settings)
     reconciler = DeploymentReconciler(redis_pool, settings)
     last_reconcile = 0.0
+    last_node_health = 0.0
 
     async with aiodocker.Docker(url=settings.docker_host) as docker_client:
         schema_ready = False
@@ -330,6 +412,12 @@ async def monitor():
                     await asyncio.gather(*tasks)
 
                 now = time.monotonic()
+                if (
+                    now - last_node_health
+                    >= settings.deployment_node_health_interval_seconds
+                ):
+                    await _refresh_deployment_nodes()
+                    last_node_health = now
                 if (
                     now - last_reconcile
                     >= settings.deployment_reconcile_interval_seconds

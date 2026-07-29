@@ -24,6 +24,7 @@ import httpx
 logger = logging.getLogger(__name__)
 
 LogCallback = Callable[[str], Awaitable[None] | None]
+ImageLoadCallback = Callable[[Path, str, LogCallback], Awaitable[None]]
 
 _MANAGED_IMAGE_RE = re.compile(
     r"^devpush/deployment-[a-z0-9][a-z0-9_-]{0,63}:[a-f0-9]{7,64}$"
@@ -129,7 +130,11 @@ class DockerfileBuilder:
         self.max_image_bytes = max_image_bytes
 
     async def build(
-        self, spec: DockerfileBuildSpec, on_log: LogCallback
+        self,
+        spec: DockerfileBuildSpec,
+        on_log: LogCallback,
+        *,
+        image_loader: ImageLoadCallback | None = None,
     ) -> DockerfileBuildResult:
         """Download, build, load, and clean up one immutable repository revision."""
         self._validate_spec(spec)
@@ -182,7 +187,10 @@ class DockerfileBuilder:
                 )
 
             await self._emit(on_log, "Loading the built image into the runtime...")
-            await self._load_image(image_archive, spec.image_reference, on_log)
+            if image_loader:
+                await image_loader(image_archive, spec.image_reference, on_log)
+            else:
+                await self._load_image(image_archive, spec.image_reference, on_log)
             digest = self._read_digest(metadata_path)
             await self._emit(
                 on_log,

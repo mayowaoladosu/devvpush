@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import math
 import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -14,6 +16,7 @@ import httpx
 
 @dataclass(frozen=True)
 class DeploymentMetrics:
+    node_id: str
     deployment_id: str
     project_id: str
     environment_id: str
@@ -41,6 +44,7 @@ class DockerMetricsExporter:
         *,
         timeout_seconds: float = 4.0,
         max_concurrency: int = 8,
+        transport: httpx.AsyncBaseTransport | None = None,
     ):
         host = docker_host or os.getenv(
             "DOCKER_HOST", "tcp://docker-proxy:2375"
@@ -50,6 +54,7 @@ class DockerMetricsExporter:
         self.max_concurrency = max(1, int(max_concurrency))
         self.client = httpx.AsyncClient(
             base_url=self.base_url,
+            transport=transport,
             timeout=httpx.Timeout(
                 connect=self.timeout_seconds,
                 read=self.timeout_seconds,
@@ -146,6 +151,7 @@ class DockerMetricsExporter:
         names = container.get("Names") or []
         container_name = str(names[0] if names else "").lstrip("/")
         return DeploymentMetrics(
+            node_id=str(labels.get("devpush.node_id") or "local"),
             deployment_id=str(labels.get("devpush.deployment_id") or ""),
             project_id=str(labels.get("devpush.project_id") or ""),
             environment_id=str(labels.get("devpush.environment_id") or ""),
@@ -280,6 +286,7 @@ class DockerMetricsExporter:
         extra: dict[str, str] | None = None,
     ) -> str:
         labels = {
+            "node_id": item.node_id,
             "project_id": item.project_id,
             "deployment_id": item.deployment_id,
             "environment_id": item.environment_id,
@@ -325,3 +332,83 @@ class DockerMetricsExporter:
         if docker_host.startswith(("http://", "https://")):
             return docker_host
         raise ValueError("Metrics exporter requires a TCP Docker proxy endpoint.")
+
+
+class RemoteNodeMetricsCollector:
+    """Read authenticated metric snapshots from enrolled node agents."""
+
+    def __init__(
+        self,
+        targets_file: str | None = None,
+        *,
+        timeout_seconds: float = 4.0,
+        max_concurrency: int = 8,
+    ):
+        self.targets_file = targets_file or os.getenv(
+            "NODE_TARGETS_FILE", "/data/nodes/targets.json"
+        )
+        self.timeout_seconds = max(0.1, float(timeout_seconds))
+        self.max_concurrency = max(1, int(max_concurrency))
+        self.client = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=self.timeout_seconds,
+                read=self.timeout_seconds,
+                write=self.timeout_seconds,
+                pool=self.timeout_seconds,
+            )
+        )
+
+    async def close(self) -> None:
+        await self.client.aclose()
+
+    def targets(self) -> list[dict[str, str]]:
+        try:
+            payload = json.loads(
+                Path(self.targets_file).read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError):
+            return []
+        targets = payload.get("targets") if isinstance(payload, dict) else None
+        if not isinstance(targets, list):
+            return []
+        return [
+            target
+            for target in targets
+            if isinstance(target, dict)
+            and isinstance(target.get("node_id"), str)
+            and isinstance(target.get("endpoint_url"), str)
+            and isinstance(target.get("token"), str)
+        ]
+
+    async def collect(self) -> tuple[list[DeploymentMetrics], dict[str, bool]]:
+        semaphore = asyncio.Semaphore(self.max_concurrency)
+
+        async def collect_target(target: dict[str, str]):
+            node_id = target["node_id"]
+            try:
+                async with semaphore:
+                    response = await self.client.get(
+                        f"{target['endpoint_url'].rstrip('/')}/v1/metrics",
+                        headers={"Authorization": f"Bearer {target['token']}"},
+                    )
+                    response.raise_for_status()
+                payload = response.json()
+                values = payload.get("metrics") if isinstance(payload, dict) else None
+                if not isinstance(values, list):
+                    raise ValueError("invalid metric payload")
+                parsed = []
+                for value in values:
+                    if not isinstance(value, dict):
+                        continue
+                    value["node_id"] = node_id
+                    parsed.append(DeploymentMetrics(**value))
+                return node_id, parsed, True
+            except (httpx.HTTPError, TypeError, ValueError):
+                return node_id, [], False
+
+        results = await asyncio.gather(
+            *(collect_target(target) for target in self.targets())
+        )
+        values = [value for _, batch, _ in results for value in batch]
+        statuses = {node_id: healthy for node_id, _, healthy in results}
+        return values, statuses
