@@ -99,6 +99,28 @@ run_isolation_build() {
     grep -Fxq 'buildkit-isolation-passed' "$output_dir/proof.txt"
 }
 
+wait_for_buildkit() {
+  local attempt buildkit_id status
+  for attempt in $(seq 1 45); do
+    buildkit_id="$("${COMPOSE_BASE[@]}" ps -q buildkitd)"
+    if [[ -n "$buildkit_id" ]]; then
+      status="$(docker inspect --format '{{.State.Status}}:{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$buildkit_id" 2>/dev/null || true)"
+      if [[ "$status" == "running:healthy" ]]; then
+        return 0
+      fi
+      case "$status" in
+        exited:*|dead:*) break ;;
+      esac
+    fi
+    sleep 2
+  done
+
+  "${COMPOSE_BASE[@]}" ps buildkit-volume-init buildkit-egress buildkitd >&2 || true
+  "${COMPOSE_BASE[@]}" logs --no-color --tail 200 \
+    buildkit-volume-init buildkit-egress buildkitd >&2 || true
+  return 1
+}
+
 set_compose_base
 cache_gc_storage="${BUILDKIT_CACHE_GC_STORAGE:-$(read_env_value "$ENV_FILE" BUILDKIT_CACHE_GC_STORAGE)}"
 cache_gc_storage="${cache_gc_storage:-2048,10240,20480}"
@@ -106,8 +128,10 @@ buildkit_proxy_ip="${BUILDKIT_PROXY_IP:-$(read_env_value "$ENV_FILE" BUILDKIT_PR
 buildkit_proxy_url="http://${buildkit_proxy_ip:-10.250.0.2}:3128"
 
 run_cmd "Starting isolated BuildKit services..." \
-  "${COMPOSE_BASE[@]}" up -d buildkit-egress buildkitd \
-    worker-jobs docker-proxy
+  "${COMPOSE_BASE[@]}" up -d buildkit-egress buildkitd docker-proxy
+run_cmd "Waiting for the rootless BuildKit daemon..." wait_for_buildkit
+run_cmd "Starting the isolated jobs worker..." \
+  "${COMPOSE_BASE[@]}" up -d worker-jobs
 run_cmd "Verifying BuildKit daemon boundary..." verify_daemon_boundary
 run_cmd "Verifying host Docker build denial..." verify_proxy_policy
 run_cmd "Blocking build-step control-plane and socket access..." run_isolation_build
