@@ -1,10 +1,10 @@
-<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-<style>
-  path { fill: #0a0a0a; }
-  @media (prefers-color-scheme: dark) {
-    path { fill: #fafafa; }
-  }
-</style>
-<path d="M8.6434 3L3.58609 22H0L5.05731 3H8.6434Z"/>
-<path d="M15.7091 21.0546L13.5329 18.8695L18.0692 14.2822H8.23039V11.0587H18.0692L13.5329 6.47145L15.7091 4.2863L24 12.6705L15.7091 21.0546Z"/>
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs><linearGradient id="a" x1="6" y1="5" x2="58" y2="60" gradientUnits="userSpaceOnUse"><stop stop-color="#D1A8FF"/><stop offset=".52" stop-color="#8B67F2"/><stop offset="1" stop-color="#4921AE"/></linearGradient></defs>
+  <rect width="64" height="64" rx="15" fill="#100A22"/>
+  <g fill="url(#a)">
+    <path d="m7 23 22-13v14l-14 5-8-3v-3Z"/><path d="m34 8 24 14v4l-9 3-15-5V8Z"/>
+    <path d="m7 33 22-6v13L7 41V33Z"/><path d="m34 27 24 6v8l-24-1V27Z"/>
+    <path d="m12 47 17-3v6l-10 6H8l4-9Z"/><path d="m34 44 20 3 5 9H49l-15-6v-6Z"/>
+    <path d="M27 53h12l4 3H23l4-3Z" opacity=".8"/>
+  </g>
 </svg>

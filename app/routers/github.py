@@ -24,6 +24,8 @@ from dependencies import (
 from models import User, UserIdentity, GithubInstallation, Project
 from services.github import GitHubService
 from services.deployment import DeploymentService
+from services.audit import AuditService
+from services.deployment_policy import DeploymentPolicyService
 from utils.user import get_user_github_token, get_user_by_provider
 from utils.urls import safe_redirect
 from config import get_settings, Settings
@@ -581,6 +583,32 @@ async def github_webhook(
 
                 for project in projects:
                     try:
+                        policy = DeploymentPolicyService.from_project(project)
+                        decision = policy.decide(
+                            branch=branch,
+                            author=str(commit_data["author"]["login"] or ""),
+                            message=str(commit_data["commit"]["message"] or ""),
+                        )
+                        if not decision.allowed:
+                            await AuditService.record(
+                                db,
+                                team_id=project.team_id,
+                                action="deployment.policy_skipped",
+                                resource_type="project",
+                                resource_id=project.id,
+                                metadata={
+                                    "branch": branch,
+                                    "author": commit_data["author"]["login"],
+                                    "reason": decision.reason,
+                                    "delivery_id": commit_data["provider_event_id"],
+                                },
+                            )
+                            logger.info(
+                                "Skipped GitHub deployment for project %s: %s",
+                                project.id,
+                                decision.reason,
+                            )
+                            continue
                         deployment = await deployment_service.schedule(
                             project=project,
                             branch=branch,

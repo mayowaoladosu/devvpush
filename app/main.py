@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from arq import create_pool
 from arq.connections import RedisSettings
-from fastapi import FastAPI, Request, Depends, HTTPException, Response
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import select
@@ -13,11 +13,11 @@ from starlette.middleware import Middleware
 from starlette.middleware.sessions import SessionMiddleware
 from starlette_wtf import CSRFProtectMiddleware
 
-from config import get_settings, Settings
-from db import get_db, AsyncSessionLocal
-from dependencies import get_current_user, TemplateResponse
-from models import User, Team, Deployment, Project
-from routers import auth, project, github, google, team, user, event, admin
+from config import Settings, get_settings
+from db import AsyncSessionLocal, get_db
+from dependencies import TemplateResponse, get_current_user
+from models import Deployment, Project, Team, User
+from routers import admin, api, auth, event, github, google, project, team, user
 from services.loki import LokiService
 
 settings = get_settings()
@@ -52,6 +52,9 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
+    title="LayerRail API",
+    description="Build, deploy, and operate applications on LayerRail.",
+    version="1.0.0",
     lifespan=lifespan,
     middleware=[
         Middleware(
@@ -83,6 +86,31 @@ async def refresh_auth_cookie(request: Request, call_next):
             secure=(settings.url_scheme == "https"),
             path="/",
             max_age=refresh["max_age"],
+        )
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault(
+        "Permissions-Policy",
+        "camera=(), microphone=(), geolocation=(), payment=()",
+    )
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: https:; "
+        "font-src 'self' data:; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'; "
+        "form-action 'self'",
+    )
+    if settings.url_scheme == "https":
+        response.headers.setdefault(
+            "Strict-Transport-Security",
+            "max-age=31536000; includeSubDomains",
         )
     return response
 
@@ -175,6 +203,7 @@ async def root(
 
 
 app.include_router(auth.router)
+app.include_router(api.router)
 app.include_router(admin.router)
 app.include_router(user.router)
 app.include_router(project.router)

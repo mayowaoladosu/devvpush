@@ -11,7 +11,7 @@ usage(){
   cat <<USG
 Usage: status.sh [-h|--help]
 
-Show the status of /dev/push stack (dev or prod auto-detected).
+Show the status of the LayerRail stack (development or production auto-detected).
 
   -h, --help         Show this help
 USG

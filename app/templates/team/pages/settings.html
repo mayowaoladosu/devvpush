@@ -16,6 +16,10 @@
     <nav class="sticky top-[122px] min-w-64 h-full flex flex-col gap-y-1 max-lg:hidden">
       <a href="#general" class="btn-sm-ghost justify-start">{{ _("General") }}</a>
       <a href="#members" class="btn-sm-ghost justify-start">{{ _("Members") }}</a>
+      <a href="#api-tokens" class="btn-sm-ghost justify-start">{{ _("API tokens") }}</a>
+      <a href="#notifications" class="btn-sm-ghost justify-start">{{ _("Notifications") }}</a>
+      <a href="#webhooks" class="btn-sm-ghost justify-start">{{ _("Webhooks") }}</a>
+      <a href="#audit-log" class="btn-sm-ghost justify-start">{{ _("Audit log") }}</a>
       <a href="#danger" class="btn-sm-ghost justify-start text-destructive hover:bg-destructive/10 dark:hover:bg-destructive/20">{{ _("Danger") }}</a>
     </nav>
 
@@ -27,6 +31,8 @@
       <section class="relative rounded-xl scroll-mt-[101px]" id="members">
         {% include "team/partials/_settings-members.html" %}
       </section>
+
+      {% include "team/partials/_settings-governance.html" %}
 
       <section class="relative rounded-xl scroll-mt-[101px]" id="danger">
         {% include "team/partials/_settings-danger.html" %}

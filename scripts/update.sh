@@ -18,7 +18,7 @@ usage(){
   cat <<USG
 Usage: update.sh [--ref <tag>] [--all | --components <csv> | --full] [--no-migrate] [--no-telemetry] [--yes|-y] [--verbose]
 
-Update /dev/push by Git tag; performs rollouts (blue-green rollouts or simple restarts).
+Update LayerRail by Git tag; performs blue-green rollouts or scoped restarts.
 
   --ref <tag>       Git tag to update to (default: latest stable tag)
                     Default update scope is app only unless overridden by flags or upgrade metadata

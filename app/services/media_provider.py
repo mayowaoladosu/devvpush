@@ -225,7 +225,7 @@ class MediaProviderService:
     def runtime_environment(cls, storage: Storage) -> dict[str, str]:
         config = cls.config_from_storage(storage)
         credentials = cls.credentials_from_storage(storage)
-        prefix = f"DEVPUSH_MEDIA_{cls.namespace(storage.name)}"
+        prefix = f"LAYERRAIL_MEDIA_{cls.namespace(storage.name)}"
         values = {
             f"{prefix}_PROVIDER": config.provider,
             f"{prefix}_CLOUD_NAME": config.cloud_name,
@@ -236,7 +236,11 @@ class MediaProviderService:
         }
         if config.folder:
             values[f"{prefix}_FOLDER"] = config.folder
-        return values
+        legacy = {
+            key.replace("LAYERRAIL_MEDIA_", "DEVPUSH_MEDIA_", 1): value
+            for key, value in values.items()
+        }
+        return {**values, **legacy}
 
     @classmethod
     def conventional_environment(
@@ -299,7 +303,7 @@ class MediaProviderService:
         credentials: MediaProviderCredentials,
     ) -> None:
         auth = httpx.BasicAuth(credentials.api_key, credentials.api_secret)
-        public_id = f"devpush_connection_tests/{uuid4().hex}"
+        public_id = f"layerrail_connection_tests/{uuid4().hex}"
         created_public_id: str | None = None
         base = f"{config.api_base_url}/v1_1/{config.cloud_name}"
         timeout = httpx.Timeout(10, connect=5)

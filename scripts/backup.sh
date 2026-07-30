@@ -13,7 +13,7 @@ Usage: backup.sh [--output <file>] [-v|--verbose] [-h|--help]
 
 Create a backup containing a full copy of \$DATA_DIR and a pg_dump from pgsql.
 
-  --output <file>     Path for the resulting tar.gz (default: ${BACKUP_DIR}/devpush-<timestamp>.tar.gz)
+  --output <file>     Path for the resulting tar.gz (default: ${BACKUP_DIR}/layerrail-<timestamp>.tar.gz)
   -v, --verbose       Enable verbose output
   -h, --help          Show this help
 USG
@@ -45,13 +45,13 @@ docker info >/dev/null 2>&1 || { err "Docker not accessible. Run with sudo or ad
 timestamp="$(date +%Y%m%d-%H%M%S)"
 if [[ -z "$output_path" ]]; then
   mkdir -p -m 0750 "$BACKUP_DIR"
-  output_path="$BACKUP_DIR/devpush-${timestamp}.tar.gz"
+  output_path="$BACKUP_DIR/layerrail-${timestamp}.tar.gz"
 else
   mkdir -p "$(dirname "$output_path")"
 fi
 
 # Prepare workspace
-tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/devpush-backup.XXXXXX")"
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/layerrail-backup.XXXXXX")"
 cleanup() {
   rm -rf "$tmp_dir"
 }
@@ -76,7 +76,7 @@ pg_user="${pg_user:-devpush-app}"
 pg_password="$(read_env_value "$ENV_FILE" POSTGRES_PASSWORD)"
 [[ -n "$pg_password" ]] || { err "POSTGRES_PASSWORD missing in $ENV_FILE"; exit 1; }
 
-pg_container="$(docker ps --filter "label=com.docker.compose.project=devpush" --filter "label=com.docker.compose.service=pgsql" --format '{{.ID}}' | head -n1 || true)"
+pg_container="$(docker ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" --filter "label=com.docker.compose.service=pgsql" --format '{{.ID}}' | head -n1 || true)"
 [[ -n "$pg_container" ]] || { err "pgsql container is not running; start the stack before running backup."; exit 1; }
 
 mkdir -p -m 0750 "$tmp_dir/db"

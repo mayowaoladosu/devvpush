@@ -1,0 +1,169 @@
+{% from "macros/copy.html" import copy %}
+{% from "macros/dialog.html" import dialog %}
+
+<div id="governance-settings" class="space-y-6">
+  <section class="card" id="api-tokens">
+    <header class="border-b">
+      <h2>{{ _("API tokens") }}</h2>
+      <p>{{ _("Create scoped team credentials for the LayerRail REST API and CLI. Raw tokens are shown only once.") }}</p>
+    </header>
+    <section class="space-y-5">
+      {% if created_api_token %}
+        <div class="alert [&>svg]:text-purple-500 [&>h2]:text-purple-700 dark:[&>h2]:text-purple-300">
+          {% include "icons/lock.svg" %}
+          <h2>{{ _("Copy this token now") }}</h2>
+          <section class="space-y-2">
+            <p>{{ _("LayerRail stores only a one-way digest. This value cannot be displayed again.") }}</p>
+            <div class="flex items-center gap-2 rounded-lg border bg-muted/50 p-2">
+              <code class="min-w-0 flex-1 break-all text-xs">{{ created_api_token }}</code>
+              {{ copy(created_api_token, class="btn-icon-ghost shrink-0") }}
+            </div>
+          </section>
+        </div>
+      {% endif %}
+      <form
+        method="post"
+        action="{{ url_for('team_settings', team_slug=team.slug).include_query_params(fragment='api_token_create') }}"
+        hx-post="{{ url_for('team_settings', team_slug=team.slug).include_query_params(fragment='api_token_create') }}"
+        hx-target="#governance-settings"
+        hx-swap="outerHTML"
+        class="space-y-4"
+      >
+        {{ token_form.csrf_token(id=False) }}
+        <div class="grid gap-4 md:grid-cols-[1fr_180px]">
+          <div class="space-y-2">
+            {{ token_form.name.label(class_="label") }}
+            {{ token_form.name(class_="input w-full", placeholder=_("CI production deploys")) }}
+            {% for error in token_form.name.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+          </div>
+          <div class="space-y-2">
+            {{ token_form.expires_in_days.label(class_="label") }}
+            {{ token_form.expires_in_days(class_="input w-full", min="1", max="3650") }}
+          </div>
+        </div>
+        <fieldset class="space-y-2">
+          <legend class="label">{{ _("Scopes") }}</legend>
+          <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            {% for field in [token_form.scope_projects_read, token_form.scope_projects_write, token_form.scope_deployments_read, token_form.scope_deployments_write, token_form.scope_logs_read, token_form.scope_audit_read, token_form.scope_webhooks_read, token_form.scope_webhooks_write] %}
+              <label class="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
+                {{ field(class_="checkbox") }}
+                {{ field.label.text }}
+              </label>
+            {% endfor %}
+          </div>
+        </fieldset>
+        <div class="flex justify-end"><button class="btn-sm" type="submit">{{ _("Create token") }}</button></div>
+      </form>
+
+      {% if api_tokens %}
+        <div class="overflow-x-auto rounded-xl border">
+          <table class="table w-full">
+            <thead><tr><th>{{ _("Name") }}</th><th>{{ _("Token") }}</th><th>{{ _("Scopes") }}</th><th>{{ _("Last used") }}</th><th></th></tr></thead>
+            <tbody>
+              {% for token in api_tokens %}
+                <tr>
+                  <td class="font-medium">{{ token.name }}</td>
+                  <td><code class="text-xs">{{ token.prefix }}••••••••</code></td>
+                  <td class="max-w-sm"><div class="flex flex-wrap gap-1">{% for scope in token.scopes %}<span class="badge-secondary">{{ scope }}</span>{% endfor %}</div></td>
+                  <td class="text-muted-foreground">{{ token.last_used_at|time_ago if token.last_used_at else _("Never") }}</td>
+                  <td class="text-right">
+                    <form method="post" hx-post="{{ url_for('team_settings', team_slug=team.slug).include_query_params(fragment='api_token_revoke') }}" hx-target="#governance-settings" hx-swap="outerHTML">
+                      {{ revoke_token_form.csrf_token(id=False) }}
+                      <input type="hidden" name="token_id" value="{{ token.id }}">
+                      <button class="btn-sm-destructive" type="submit">{{ _("Revoke") }}</button>
+                    </form>
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% endif %}
+    </section>
+  </section>
+
+  <section class="card" id="notifications">
+    <header class="border-b">
+      <h2>{{ _("Email notifications") }}</h2>
+      <p>{{ _("Notify operators when deployments reach important terminal states. Leave recipients blank to notify team owners and admins.") }}</p>
+    </header>
+    <form method="post" hx-post="{{ url_for('team_settings', team_slug=team.slug).include_query_params(fragment='notification_settings') }}" hx-target="#governance-settings" hx-swap="outerHTML">
+      {{ notification_form.csrf_token(id=False) }}
+      <section class="space-y-4">
+        <div class="grid gap-2 md:grid-cols-3">
+          {% for field in [notification_form.deployment_succeeded, notification_form.deployment_failed, notification_form.deployment_canceled] %}
+            <label class="flex items-center gap-2 rounded-lg border px-3 py-2">{{ field(class_="checkbox") }} {{ field.label.text }}</label>
+          {% endfor %}
+        </div>
+        <div class="space-y-2">
+          {{ notification_form.recipients.label(class_="label") }}
+          {{ notification_form.recipients(class_="textarea w-full min-h-24", placeholder="ops@example.com\noncall@example.com") }}
+          <p class="text-xs text-muted-foreground">{{ _("One address per line or comma-separated.") }}</p>
+        </div>
+      </section>
+      <footer class="flex justify-end"><button class="btn-sm" type="submit">{{ _("Save notifications") }}</button></footer>
+    </form>
+  </section>
+
+  <section class="card" id="webhooks">
+    <header class="border-b">
+      <h2>{{ _("Signed webhooks") }}</h2>
+      <p>{{ _("Deliver durable deployment events with HMAC-SHA256 signatures and bounded retries.") }}</p>
+    </header>
+    <section class="space-y-5">
+      {% if created_webhook_secret %}
+        <div class="alert">
+          {% include "icons/lock.svg" %}
+          <h2>{{ _("Copy the signing secret now") }}</h2>
+          <section><div class="flex items-center gap-2 rounded-lg border bg-muted/50 p-2"><code class="min-w-0 flex-1 break-all text-xs">{{ created_webhook_secret }}</code>{{ copy(created_webhook_secret, class="btn-icon-ghost shrink-0") }}</div></section>
+        </div>
+      {% endif %}
+      <form method="post" hx-post="{{ url_for('team_settings', team_slug=team.slug).include_query_params(fragment='webhook_create') }}" hx-target="#governance-settings" hx-swap="outerHTML" class="space-y-4">
+        {{ webhook_form.csrf_token(id=False) }}
+        <div class="grid gap-4 md:grid-cols-2">
+          <div class="space-y-2">{{ webhook_form.name.label(class_="label") }}{{ webhook_form.name(class_="input w-full", placeholder=_("Production events")) }}</div>
+          <div class="space-y-2">{{ webhook_form.url.label(class_="label") }}{{ webhook_form.url(class_="input w-full font-mono text-xs", placeholder="https://example.com/layerrail") }}{% for error in webhook_form.url.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}</div>
+        </div>
+        <div class="flex flex-wrap gap-2">
+          {% for field in [webhook_form.deployment_created, webhook_form.deployment_succeeded, webhook_form.deployment_failed, webhook_form.deployment_canceled, webhook_form.deployment_skipped] %}
+            <label class="flex items-center gap-2 rounded-lg border px-3 py-2">{{ field(class_="checkbox") }} {{ field.label.text }}</label>
+          {% endfor %}
+        </div>
+        <div class="flex justify-end"><button class="btn-sm" type="submit">{{ _("Add webhook") }}</button></div>
+      </form>
+
+      {% for endpoint in webhook_endpoints %}
+        <div class="rounded-xl border p-4 space-y-3">
+          <div class="flex items-center gap-3">
+            <div class="min-w-0"><div class="font-medium">{{ endpoint.name }}</div><div class="truncate font-mono text-xs text-muted-foreground">{{ endpoint.url }}</div></div>
+            <span class="badge-outline ml-auto">{{ endpoint.status|capitalize }}</span>
+            {% if endpoint.failure_count %}<span class="badge-destructive">{{ endpoint.failure_count }} {{ _("failures") }}</span>{% endif %}
+          </div>
+          <div class="flex flex-wrap gap-1">{% for event in endpoint.events %}<span class="badge-secondary">{{ event }}</span>{% endfor %}</div>
+          {% if endpoint.last_error %}<p class="text-sm text-destructive">{{ endpoint.last_error }}</p>{% endif %}
+          <div class="flex justify-end gap-2">
+            <form method="post" hx-post="{{ url_for('team_settings', team_slug=team.slug).include_query_params(fragment='webhook_test') }}" hx-target="#governance-settings" hx-swap="outerHTML">{{ delete_webhook_form.csrf_token(id=False) }}<input type="hidden" name="endpoint_id" value="{{ endpoint.id }}"><button class="btn-sm-outline" type="submit">{{ _("Send test") }}</button></form>
+            <form method="post" hx-post="{{ url_for('team_settings', team_slug=team.slug).include_query_params(fragment='webhook_delete') }}" hx-target="#governance-settings" hx-swap="outerHTML">{{ delete_webhook_form.csrf_token(id=False) }}<input type="hidden" name="endpoint_id" value="{{ endpoint.id }}"><button class="btn-sm-destructive" type="submit">{{ _("Delete") }}</button></form>
+          </div>
+        </div>
+      {% endfor %}
+
+      {% if webhook_deliveries %}
+        <div class="overflow-x-auto rounded-xl border">
+          <table class="table w-full"><thead><tr><th>{{ _("Event") }}</th><th>{{ _("Status") }}</th><th>{{ _("Attempts") }}</th><th>{{ _("Created") }}</th></tr></thead><tbody>{% for delivery in webhook_deliveries %}<tr><td><code>{{ delivery.event }}</code></td><td><span class="badge-outline">{{ delivery.status }}</span></td><td>{{ delivery.attempts }}</td><td class="text-muted-foreground">{{ delivery.created_at|time_ago }}</td></tr>{% endfor %}</tbody></table>
+        </div>
+      {% endif %}
+    </section>
+  </section>
+
+  <section class="card" id="audit-log">
+    <header class="border-b"><h2>{{ _("Audit log") }}</h2><p>{{ _("A redacted history of team, API, configuration, and deployment actions.") }}</p></header>
+    <section>
+      {% if audit_events %}
+        <div class="overflow-x-auto rounded-xl border"><table class="table w-full"><thead><tr><th>{{ _("Action") }}</th><th>{{ _("Resource") }}</th><th>{{ _("Actor") }}</th><th>{{ _("Time") }}</th></tr></thead><tbody>{% for event in audit_events %}<tr><td class="font-medium">{{ event.action }}</td><td><span class="badge-secondary">{{ event.resource_type }}</span> <code class="text-xs">{{ (event.resource_id or '')[:12] }}</code></td><td class="text-muted-foreground">{% if event.actor_user_id %}user:{{ event.actor_user_id }}{% elif event.api_token_id %}token:{{ event.api_token_id[:8] }}{% else %}system{% endif %}</td><td class="text-muted-foreground">{{ event.created_at|time_ago }}</td></tr>{% endfor %}</tbody></table></div>
+      {% else %}
+        <p class="text-sm text-muted-foreground">{{ _("No audit events yet.") }}</p>
+      {% endif %}
+    </section>
+  </section>
+</div>

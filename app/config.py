@@ -9,9 +9,9 @@ logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
-    app_name: str = "/dev/push"
+    app_name: str = "LayerRail"
     app_description: str = (
-        "An open-source platform to build and deploy any app from GitHub."
+        "Build, deploy, and operate applications on infrastructure you control."
     )
     url_scheme: str = "https"
     app_hostname: str = ""
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     smtp_username: str = ""
     smtp_password: str = ""
     email_logo: str = ""
-    email_sender_name: str = "/dev/push"
+    email_sender_name: str = "LayerRail"
     email_sender_address: str = ""
     secret_key: str = ""
     encryption_key: str = ""
@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     deployment_node_health_interval_seconds: int = 10
     deployment_node_request_timeout_seconds: int = 15
     deployment_node_targets_file: str = ""
+    rate_limiting_enabled: bool = True
+    auth_rate_limit_requests: int = 5
+    auth_rate_limit_window_seconds: int = 60
+    api_rate_limit_requests: int = 120
+    api_rate_limit_window_seconds: int = 60
+    api_deployment_rate_limit_requests: int = 10
+    api_deployment_rate_limit_window_seconds: int = 60
     buildkit_host: str = "unix:///run/buildkit/buildkitd.sock"
     buildkit_proxy_url: str = "http://10.250.0.2:3128"
     data_dir: str = "/data"
@@ -99,8 +106,10 @@ class Settings(BaseSettings):
     magic_link_ttl_seconds: int = 900
     auth_token_ttl_days: int = 30
     auth_token_refresh_threshold_days: int = 1
-    auth_token_issuer: str = "devpush-app"
-    auth_token_audience: str = "devpush-web"
+    auth_token_issuer: str = "layerrail-app"
+    auth_token_audience: str = "layerrail-web"
+    legacy_auth_token_issuers: str = "devpush-app"
+    legacy_auth_token_audiences: str = "devpush-web"
     job_max_tries: int = 3
     server_ip: str = "127.0.0.1"
 

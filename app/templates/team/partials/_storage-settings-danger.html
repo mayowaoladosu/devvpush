@@ -2,9 +2,9 @@
   <header class="border-b">
     <h2>{{ _('Danger zone') }}</h2>
     {% if storage.type == 'object' %}
-      <p>{{ _('Disconnect this credential-backed connection. The remote bucket and its objects are never deleted by DevPush.') }}</p>
+      <p>{{ _('Disconnect this credential-backed connection. The remote bucket and its objects are never deleted by LayerRail.') }}</p>
     {% elif storage.type == 'media' %}
-      <p>{{ _('Disconnect this credential-backed connection. Cloudinary assets and transformations are never deleted by DevPush.') }}</p>
+      <p>{{ _('Disconnect this credential-backed connection. Cloudinary assets and transformations are never deleted by LayerRail.') }}</p>
     {% else %}
       <p>{{ _('Reset or permanently delete storage data. These actions are blocked while any deployment container still references this storage.') }}</p>
     {% endif %}
@@ -74,9 +74,9 @@
       ) %}
       <div class="space-y-4" x-data="{ confirm: '' }">
         {% if storage.type == 'object' %}
-          <p>{{ _('This removes the DevPush connection and encrypted credentials. It does not delete the remote bucket or any objects.') }}</p>
+            <p>{{ _('This removes the LayerRail connection and encrypted credentials. It does not delete the remote bucket or any objects.') }}</p>
         {% elif storage.type == 'media' %}
-          <p>{{ _('This removes the DevPush connection and encrypted credentials. It does not delete any Cloudinary assets or transformations.') }}</p>
+            <p>{{ _('This removes the LayerRail connection and encrypted credentials. It does not delete any Cloudinary assets or transformations.') }}</p>
         {% else %}
           <p>{{ _('This will delete the storage and all of its data. This action cannot be undone.') }}</p>
         {% endif %}

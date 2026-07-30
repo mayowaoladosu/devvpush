@@ -1,36 +1,33 @@
-## Now
+# LayerRail product ledger
 
-- [x] **Database**: Allow users to create SQLite databases and make them available to projects/environments.
-- [x] **Persistent storage**: Environment-scoped local volumes and SQLite databases with configurable container paths, redeploy/rollback persistence, and mounted-container deletion safety.
-- [x] **Object storage**: Encrypted AWS S3, Cloudflare R2, and generic S3-compatible connections with runtime-only credentials and bucket verification.
-- [x] **Media providers**: Add a dedicated Cloudinary integration (not S3-compatible).
-- [x] **Monitoring**: Add Prometheus to track I/O, network, memory, CPU, etc. Add dashboard.
+## Launch core — complete
 
-## Next
+- [x] GitHub App authentication, repository import, signed webhooks, and immutable commit deployments.
+- [x] Vercel-grade framework, package manager, monorepo, static adapter, and Dockerfile detection.
+- [x] Zero-config language runners and rootless isolated Dockerfile builds.
+- [x] Environment, branch, immutable deployment, custom-domain, TLS, and redirect routing.
+- [x] Newest-commit-wins webhook scheduling, deterministic jobs, cancel, redeploy, rollback, and queue recovery.
+- [x] Project deployment policy: trigger enablement, branch globs, ignored authors, skip tokens, concurrency, and supersession.
+- [x] Isolated dependency caching with atomic generation rotation and safe pruning.
+- [x] Local SQLite and persistent volumes with environment scoping and retained-container safety.
+- [x] Encrypted S3, R2, generic object storage, and Cloudinary media connections.
+- [x] Live/retained logs, structured durable diagnostics, log copy/export, Prometheus resource monitoring, and outage-safe dashboards.
+- [x] Authenticated remote deployment nodes with capacity, drain/delete safety, central routing, logs, metrics, and Dockerfile image transfer.
+- [x] Team RBAC, invitations, scoped API tokens, redacted audit history, and baseline browser security headers.
+- [x] Atomic Redis rate limiting for sign-in and REST/deployment automation.
+- [x] Durable signed webhooks and deployment email notification preferences.
+- [x] Versioned REST API and dependency-free installable `layerrail` CLI.
+- [x] Project export and `.layerrail.json` config-as-code with a published JSON Schema.
+- [x] LayerRail product identity, runtime variables, metrics, emails, control-plane UI, documentation, and compatibility aliases.
+- [x] Reversible database migrations, upgrade metadata, CI validation, and release runbook.
 
-- [x] **Cancel and skip**: Allow users to cancel ongoing deployments, skip deployments on rapid commits.
-- [x] **Dependency caching**: Add caching for dependencies (i.e. volumes for .venv, node_modules, etc) per project.
-- [x] **Better error logging**: improve error logging for deployments (e.g., when errors aren't captured by Loki, like a worker-jobs crash).
-- [x] **Remote nodes**: Authenticated multi-node placement with capacity, drain safety, central routing, logs, metrics, and Dockerfile image transfer.
-- [ ] **Deployment settings**: Provide more granular rules for deployments (triggers, # concurrent events, commit author, etc).
-- [ ] **Rate limiting**: Add Traefik protections for auth + sensitive endpoints (env-flagged).
-- [ ] **Migrate away from ARQ**: ARQ is deprecated, move over to https://github.com/taskiq-python/taskiq or similar.
+## Ecosystem expansion — optional, not launch blockers
 
-## Later
+- [ ] GitLab, Bitbucket, and self-hosted Git provider adapters behind the existing source-provider seam.
+- [ ] Pull-request preview comments and automatic preview cleanup.
+- [ ] Managed cron, queue, and worker product primitives beyond application deployments.
+- [ ] Java-specific first-party runner image (Dockerfile Java applications already work).
+- [ ] Billing plans and hosted-control-plane metering.
+- [ ] AI/MCP operational assistants after stable public API adoption.
 
-- [ ] **API & CLI**: REST API for projects + deployments. Leverage it to create a CLI.
-- [ ] **AI & MCP**: integrating an agent to actively audit and fix code/infra.
-- [ ] **GitLab & BitBucket support**: 
-- [ ] **Enterprise/self-hosted git provider support**: for example GitHub Enterprise.
-- [ ] **Project webhook**
-- [ ] **Cron**
-- [ ] **Queue + Worker**
-- [ ] **Java support**
-- [ ] **Granular permissions**
-- [ ] **Export**: Project export/import.
-- [ ] **Deploy on /dev/push**: Button/link to deploy on /dev/push (w/ configurable values).
-- [ ] **Notifications**: Send notifications on events (e.g., error/success)
-- [ ] **Audit logs**: Implement basic audit logs (especially logins and deployments).
-- [ ] **Redirects**: Redirect rules (incl. bulk import).
-- [ ] **devpush.json**: Configuration file to override project settings.
-- [ ] **Logs improvements**: Copy button, better out of logs errors handling, imrpove log type parsing (e.g. error/warning/success).
+These items expand provider reach or add new product categories. They are intentionally outside the completed deployment control-plane core.

@@ -231,7 +231,7 @@ class ObjectStorageService:
     def runtime_environment(cls, storage: Storage) -> dict[str, str]:
         config = cls.config_from_storage(storage)
         credentials = cls.credentials_from_storage(storage)
-        prefix = f"DEVPUSH_OBJECT_{cls.namespace(storage.name)}"
+        prefix = f"LAYERRAIL_OBJECT_{cls.namespace(storage.name)}"
         values = {
             f"{prefix}_PROVIDER": config.provider,
             f"{prefix}_BUCKET": config.bucket,
@@ -245,7 +245,11 @@ class ObjectStorageService:
             values[f"{prefix}_SESSION_TOKEN"] = credentials.session_token
         if config.public_url:
             values[f"{prefix}_PUBLIC_URL"] = config.public_url
-        return values
+        legacy = {
+            key.replace("LAYERRAIL_OBJECT_", "DEVPUSH_OBJECT_", 1): value
+            for key, value in values.items()
+        }
+        return {**values, **legacy}
 
     @staticmethod
     def conventional_environment(

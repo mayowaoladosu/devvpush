@@ -231,10 +231,6 @@
                 <h2>{{ _("This domain is disabled.") }}</h2>
               {% endif %}
               <section>
-                {# <p><a href="https://devpush.com/docs/domains" class="badge-outline">
-                  {{ _('Learn more about domains') }}
-                  {% include "icons/arrow-up-right.svg" %}
-                </a></p> #}
                 {% if domain.status == "disabled" %}
                   <p>{{ _("This domain has been disabled, most likely because the environment it was associated with was deleted. Please select a new environment.") }}</p>
                 {% else %}

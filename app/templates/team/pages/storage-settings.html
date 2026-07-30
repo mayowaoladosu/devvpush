@@ -56,10 +56,10 @@
             {% set storage_description = _('Default volume path. Each project connection can override it:') %}
           {% else %}
             {% if storage.type == "object" %}
-              {% set storage_path = "DEVPUSH_OBJECT_" ~ object_storage_namespace(storage.name) ~ "_*" %}
+              {% set storage_path = "LAYERRAIL_OBJECT_" ~ object_storage_namespace(storage.name) ~ "_*" %}
               {% set storage_description = _('Runtime environment variable prefix for this object connection:') %}
             {% else %}
-              {% set storage_path = "DEVPUSH_MEDIA_" ~ media_provider_namespace(storage.name) ~ "_*" %}
+              {% set storage_path = "LAYERRAIL_MEDIA_" ~ media_provider_namespace(storage.name) ~ "_*" %}
               {% set storage_description = _('Runtime environment variable prefix for this media connection:') %}
             {% endif %}
           {% endif %}

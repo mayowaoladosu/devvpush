@@ -272,6 +272,184 @@ class TeamInvite(Base):
     inviter: Mapped[User] = relationship()
 
 
+class ApiToken(Base):
+    __tablename__: str = "api_token"
+
+    id: Mapped[str] = mapped_column(
+        String(32), primary_key=True, default=lambda: token_hex(16)
+    )
+    team_id: Mapped[str] = mapped_column(
+        ForeignKey("team.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True, index=True
+    )
+    scopes: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    expires_at: Mapped[datetime | None] = mapped_column(nullable=True, index=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(nullable=True, index=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        nullable=False, default=utc_now, index=True
+    )
+
+    team: Mapped[Team] = relationship()
+    created_by_user: Mapped[User | None] = relationship()
+
+    @override
+    def __repr__(self):
+        return f"<ApiToken {self.prefix} ({self.team_id})>"
+
+
+class AuditEvent(Base):
+    __tablename__: str = "audit_event"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    team_id: Mapped[str | None] = mapped_column(
+        ForeignKey("team.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    actor_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    api_token_id: Mapped[str | None] = mapped_column(
+        ForeignKey("api_token.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    action: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    resource_type: Mapped[str] = mapped_column(
+        String(40), nullable=False, index=True
+    )
+    resource_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    metadata_json: Mapped[dict[str, object]] = mapped_column(
+        "metadata", JSONB, nullable=False, default=dict
+    )
+    ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        nullable=False, default=utc_now, index=True
+    )
+
+    team: Mapped[Team | None] = relationship()
+    actor_user: Mapped[User | None] = relationship()
+    api_token: Mapped[ApiToken | None] = relationship()
+
+
+class NotificationSettings(Base):
+    __tablename__: str = "notification_settings"
+
+    team_id: Mapped[str] = mapped_column(
+        ForeignKey("team.id", ondelete="CASCADE"), primary_key=True
+    )
+    deployment_succeeded: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    deployment_failed: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+    deployment_canceled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    recipients: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    team: Mapped[Team] = relationship()
+
+
+class WebhookEndpoint(Base):
+    __tablename__: str = "webhook_endpoint"
+
+    id: Mapped[str] = mapped_column(
+        String(32), primary_key=True, default=lambda: token_hex(16)
+    )
+    team_id: Mapped[str] = mapped_column(
+        ForeignKey("team.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    url: Mapped[str] = mapped_column(String(2048), nullable=False)
+    events: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    _secret: Mapped[str] = mapped_column("secret_encrypted", Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        SQLAEnum("active", "disabled", name="webhook_endpoint_status"),
+        nullable=False,
+        default="active",
+        index=True,
+    )
+    failure_count: Mapped[int] = mapped_column(nullable=False, default=0)
+    last_delivered_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("user.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        nullable=False, default=utc_now, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    team: Mapped[Team] = relationship()
+    created_by_user: Mapped[User | None] = relationship()
+
+    @property
+    def secret(self) -> str:
+        return get_fernet().decrypt(self._secret.encode()).decode()
+
+    @secret.setter
+    def secret(self, value: str):
+        self._secret = get_fernet().encrypt(value.encode()).decode()
+
+
+class WebhookDelivery(Base):
+    __tablename__: str = "webhook_delivery"
+
+    id: Mapped[str] = mapped_column(
+        String(32), primary_key=True, default=lambda: token_hex(16)
+    )
+    endpoint_id: Mapped[str] = mapped_column(
+        ForeignKey("webhook_endpoint.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    event: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    payload: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, default=dict
+    )
+    status: Mapped[str] = mapped_column(
+        SQLAEnum(
+            "pending",
+            "delivered",
+            "failed",
+            name="webhook_delivery_status",
+        ),
+        nullable=False,
+        default="pending",
+        index=True,
+    )
+    attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    response_status: Mapped[int | None] = mapped_column(nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        nullable=False, default=utc_now, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        nullable=False, default=utc_now, onupdate=utc_now
+    )
+
+    endpoint: Mapped[WebhookEndpoint] = relationship()
+
+    __table_args__ = (
+        Index("ix_webhook_delivery_endpoint_created", "endpoint_id", "created_at"),
+    )
+
+
 class GithubInstallation(Base):
     __tablename__: str = "github_installation"
 

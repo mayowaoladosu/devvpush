@@ -22,6 +22,11 @@ from models import (
     TeamInvite,
     Storage,
     StorageProject,
+    ApiToken,
+    AuditEvent,
+    NotificationSettings,
+    WebhookDelivery,
+    WebhookEndpoint,
     utc_now,
 )
 from dependencies import (
@@ -50,6 +55,13 @@ from forms.team import (
     TeamMemberRemoveForm,
     TeamMemberRoleForm,
 )
+from forms.governance import (
+    ApiTokenCreateForm,
+    ApiTokenRevokeForm,
+    NotificationSettingsForm,
+    WebhookEndpointDeleteForm,
+    WebhookEndpointForm,
+)
 from forms.storage import (
     StorageCreateForm,
     StorageDeleteForm,
@@ -76,6 +88,12 @@ from services.storage import (
     StorageService,
 )
 from services.storage_jobs import StorageJobs
+from services.api_tokens import ApiTokenError, ApiTokenService
+from services.audit import AuditService
+from services.notifications import (
+    NotificationConfigurationError,
+    NotificationService,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +324,7 @@ async def team_storage(
         storage_count_query = storage_count_query.where(
             Storage.created_by_user_id == current_user.id
         )
+
     storage_count_result = await db.execute(storage_count_query)
     storage_count = storage_count_result.scalar_one() or 0
 
@@ -1206,6 +1225,222 @@ async def team_settings(
             status_code=302,
         )
 
+    token_form: Any = await ApiTokenCreateForm.from_formdata(request)
+    revoke_token_form: Any = await ApiTokenRevokeForm.from_formdata(request)
+    webhook_form: Any = await WebhookEndpointForm.from_formdata(request)
+    delete_webhook_form: Any = await WebhookEndpointDeleteForm.from_formdata(request)
+    created_api_token = None
+    created_webhook_secret = None
+
+    notification_settings = await db.get(NotificationSettings, team.id)
+    if not notification_settings:
+        notification_settings = NotificationSettings(
+            team_id=team.id,
+            deployment_succeeded=False,
+            deployment_failed=True,
+            deployment_canceled=False,
+            recipients=[],
+        )
+    notification_form: Any = await NotificationSettingsForm.from_formdata(
+        request,
+        data={
+            "deployment_succeeded": notification_settings.deployment_succeeded,
+            "deployment_failed": notification_settings.deployment_failed,
+            "deployment_canceled": notification_settings.deployment_canceled,
+            "recipients": "\n".join(notification_settings.recipients or []),
+        },
+    )
+
+    if fragment != "api_token_create":
+        token_form.name.data = ""
+        token_form.expires_in_days.data = 90
+        token_form.scope_projects_read.data = True
+        token_form.scope_projects_write.data = False
+        token_form.scope_deployments_read.data = True
+        token_form.scope_deployments_write.data = True
+        token_form.scope_logs_read.data = True
+        token_form.scope_audit_read.data = False
+        token_form.scope_webhooks_read.data = False
+        token_form.scope_webhooks_write.data = False
+    if fragment != "webhook_create":
+        webhook_form.name.data = ""
+        webhook_form.url.data = ""
+        webhook_form.deployment_created.data = True
+        webhook_form.deployment_succeeded.data = True
+        webhook_form.deployment_failed.data = True
+        webhook_form.deployment_canceled.data = True
+        webhook_form.deployment_skipped.data = True
+    if fragment != "notification_settings":
+        notification_form.deployment_succeeded.data = (
+            notification_settings.deployment_succeeded
+        )
+        notification_form.deployment_failed.data = notification_settings.deployment_failed
+        notification_form.deployment_canceled.data = (
+            notification_settings.deployment_canceled
+        )
+        notification_form.recipients.data = "\n".join(
+            notification_settings.recipients or []
+        )
+
+    if fragment == "api_token_create" and request.method == "POST":
+        if await token_form.validate_on_submit():
+            try:
+                token, created_api_token = await ApiTokenService.create(
+                    db,
+                    team=team,
+                    user=current_user,
+                    name=token_form.name.data,
+                    scopes=token_form.scopes(),
+                    expires_in_days=token_form.expires_in_days.data,
+                    mode="test" if settings.env == "development" else "live",
+                )
+                await AuditService.record(
+                    db,
+                    team_id=team.id,
+                    user=current_user,
+                    request=request,
+                    action="api_token.created",
+                    resource_type="api_token",
+                    resource_id=token.id,
+                    metadata={"name": token.name, "scopes": token.scopes},
+                )
+                flash(request, _("API token created. Copy it now."), "success")
+                token_form.name.data = ""
+                token_form.expires_in_days.data = 90
+            except ApiTokenError as exc:
+                token_form.name.errors = [str(exc)]
+
+    if fragment == "api_token_revoke" and request.method == "POST":
+        if await revoke_token_form.validate_on_submit():
+            token = await db.get(ApiToken, revoke_token_form.token_id.data)
+            if not token or token.team_id != team.id:
+                flash(request, _("API token not found."), "error")
+            else:
+                await ApiTokenService.revoke(db, token, team_id=team.id)
+                await AuditService.record(
+                    db,
+                    team_id=team.id,
+                    user=current_user,
+                    request=request,
+                    action="api_token.revoked",
+                    resource_type="api_token",
+                    resource_id=token.id,
+                    metadata={"name": token.name},
+                )
+                flash(request, _("API token revoked."), "success")
+
+    if fragment == "notification_settings" and request.method == "POST":
+        if await notification_form.validate_on_submit():
+            notification_settings.deployment_succeeded = bool(
+                notification_form.deployment_succeeded.data
+            )
+            notification_settings.deployment_failed = bool(
+                notification_form.deployment_failed.data
+            )
+            notification_settings.deployment_canceled = bool(
+                notification_form.deployment_canceled.data
+            )
+            notification_settings.recipients = notification_form.recipient_list()
+            await db.merge(notification_settings)
+            await db.commit()
+            await AuditService.record(
+                db,
+                team_id=team.id,
+                user=current_user,
+                request=request,
+                action="notifications.updated",
+                resource_type="team",
+                resource_id=team.id,
+                metadata={
+                    "deployment_succeeded": notification_settings.deployment_succeeded,
+                    "deployment_failed": notification_settings.deployment_failed,
+                    "deployment_canceled": notification_settings.deployment_canceled,
+                    "recipient_count": len(notification_settings.recipients),
+                },
+            )
+            flash(request, _("Notification settings updated."), "success")
+
+    if fragment == "webhook_create" and request.method == "POST":
+        if await webhook_form.validate_on_submit():
+            try:
+                endpoint, created_webhook_secret = (
+                    await NotificationService.configure_endpoint(
+                        db,
+                        team_id=team.id,
+                        user_id=current_user.id,
+                        name=webhook_form.name.data,
+                        url=webhook_form.url.data,
+                        events=webhook_form.events(),
+                        settings=settings,
+                    )
+                )
+                await AuditService.record(
+                    db,
+                    team_id=team.id,
+                    user=current_user,
+                    request=request,
+                    action="webhook.created",
+                    resource_type="webhook",
+                    resource_id=endpoint.id,
+                    metadata={"events": endpoint.events},
+                )
+                flash(
+                    request,
+                    _("Webhook created. Copy its signing secret now."),
+                    "success",
+                )
+                webhook_form = await WebhookEndpointForm.from_formdata(request)
+                webhook_form.name.data = ""
+                webhook_form.url.data = ""
+            except NotificationConfigurationError as exc:
+                webhook_form.url.errors = [str(exc)]
+
+    if fragment == "webhook_delete" and request.method == "POST":
+        if await delete_webhook_form.validate_on_submit():
+            endpoint = await db.get(
+                WebhookEndpoint,
+                delete_webhook_form.endpoint_id.data,
+            )
+            if not endpoint or endpoint.team_id != team.id:
+                flash(request, _("Webhook not found."), "error")
+            else:
+                endpoint_id = endpoint.id
+                await db.delete(endpoint)
+                await db.commit()
+                await AuditService.record(
+                    db,
+                    team_id=team.id,
+                    user=current_user,
+                    request=request,
+                    action="webhook.deleted",
+                    resource_type="webhook",
+                    resource_id=endpoint_id,
+                )
+                flash(request, _("Webhook deleted."), "success")
+
+    if fragment == "webhook_test" and request.method == "POST":
+        form_data = await request.form()
+        endpoint = await db.get(
+            WebhookEndpoint,
+            str(form_data.get("endpoint_id") or ""),
+        )
+        if not endpoint or endpoint.team_id != team.id:
+            flash(request, _("Webhook not found."), "error")
+        else:
+            delivery = WebhookDelivery(
+                endpoint_id=endpoint.id,
+                event="webhook.test",
+                payload={
+                    "message": "LayerRail webhook test",
+                    "team_id": team.id,
+                    "sent_at": utc_now().isoformat() + "Z",
+                },
+            )
+            db.add(delivery)
+            await db.commit()
+            await NotificationService.enqueue_webhook(queue, delivery.id)
+            flash(request, _("Webhook test queued."), "success")
+
     # Delete
     delete_team_form = None
     if get_access(role, "owner"):
@@ -1472,6 +1707,52 @@ async def team_settings(
         )
     )
 
+    api_tokens = list(
+        (
+            await db.execute(
+                select(ApiToken)
+                .where(
+                    ApiToken.team_id == team.id,
+                    ApiToken.revoked_at.is_(None),
+                )
+                .order_by(ApiToken.created_at.desc())
+            )
+        ).scalars()
+    )
+    webhook_endpoints = list(
+        (
+            await db.execute(
+                select(WebhookEndpoint)
+                .where(WebhookEndpoint.team_id == team.id)
+                .order_by(WebhookEndpoint.created_at.desc())
+            )
+        ).scalars()
+    )
+    webhook_deliveries = list(
+        (
+            await db.execute(
+                select(WebhookDelivery)
+                .join(
+                    WebhookEndpoint,
+                    WebhookDelivery.endpoint_id == WebhookEndpoint.id,
+                )
+                .where(WebhookEndpoint.team_id == team.id)
+                .order_by(WebhookDelivery.created_at.desc())
+                .limit(20)
+            )
+        ).scalars()
+    )
+    audit_events = list(
+        (
+            await db.execute(
+                select(AuditEvent)
+                .where(AuditEvent.team_id == team.id)
+                .order_by(AuditEvent.id.desc())
+                .limit(100)
+            )
+        ).scalars()
+    )
+
     if fragment in (
         "add_member",
         "delete_member",
@@ -1490,6 +1771,35 @@ async def team_settings(
                 "remove_member_form": remove_member_form,
                 "member_role_form": member_role_form,
                 "owner_count": owner_count,
+            },
+        )
+
+    if fragment in {
+        "api_token_create",
+        "api_token_revoke",
+        "notification_settings",
+        "webhook_create",
+        "webhook_delete",
+        "webhook_test",
+    } and request.headers.get("HX-Request"):
+        return TemplateResponse(
+            request=request,
+            name="team/partials/_settings-governance.html",
+            context={
+                "current_user": current_user,
+                "team": team,
+                "api_tokens": api_tokens,
+                "token_form": token_form,
+                "revoke_token_form": revoke_token_form,
+                "created_api_token": created_api_token,
+                "notification_settings": notification_settings,
+                "notification_form": notification_form,
+                "webhook_endpoints": webhook_endpoints,
+                "webhook_deliveries": webhook_deliveries,
+                "webhook_form": webhook_form,
+                "delete_webhook_form": delete_webhook_form,
+                "created_webhook_secret": created_webhook_secret,
+                "audit_events": audit_events,
             },
         )
 
@@ -1512,6 +1822,18 @@ async def team_settings(
             "member_role_form": member_role_form,
             "member_invites": member_invites,
             "owner_count": owner_count,
+            "api_tokens": api_tokens,
+            "token_form": token_form,
+            "revoke_token_form": revoke_token_form,
+            "created_api_token": created_api_token,
+            "notification_settings": notification_settings,
+            "notification_form": notification_form,
+            "webhook_endpoints": webhook_endpoints,
+            "webhook_deliveries": webhook_deliveries,
+            "webhook_form": webhook_form,
+            "delete_webhook_form": delete_webhook_form,
+            "created_webhook_secret": created_webhook_secret,
+            "audit_events": audit_events,
             "latest_teams": latest_teams,
         },
     )

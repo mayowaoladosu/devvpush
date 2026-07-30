@@ -6,7 +6,7 @@
     {% if not current_user %}
       <h1 class="h4">{{ _('Deployment not found') }}</h1>
       <p class="text-muted-foreground mt-1">{{ _('The deployment you are looking for is not online anymore or does not exist.') }}</p>
-      <a class="btn-sm mt-4" href="https://devpu.sh">{{ _('More about /dev/push') }}</a>
+      <a class="btn-sm mt-4" href="https://docs.layerrail.com">{{ _('LayerRail documentation') }}</a>
     {% elif deployment_url %}
       <h1 class="h4">{{ _('Deployment not active') }}</h1>
       <p class="text-muted-foreground mt-1">{{ _('The deployment you are looking for does not have an active URL anymore. You can redeploy it.') }}</p>

@@ -1,0 +1,19 @@
+[Unit]
+Description=LayerRail deployment control plane
+After=docker.service network.target
+Wants=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=LAYERRAIL_ENV=production
+WorkingDirectory=/opt/layerrail
+ExecStart=/opt/layerrail/scripts/start.sh
+ExecStop=/opt/layerrail/scripts/stop.sh
+TimeoutStartSec=600
+TimeoutStopSec=600
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

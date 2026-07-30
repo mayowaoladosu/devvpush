@@ -13,7 +13,7 @@ usage() {
   cat <<USG
 Usage: uninstall.sh [--yes] [--skip-backup] [--no-telemetry] [--verbose]
 
-Uninstall /dev/push from this server.
+Uninstall LayerRail from this server.
 
   --yes, -y         Non-interactive; skip prompts and remove data/logs if they exist
   --skip-backup     Skip creating a backup before uninstalling
@@ -38,7 +38,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$ENVIRONMENT" == "development" ]]; then
-  err "This script is for production only. For development, simply stop the stack (scripts/stop.sh), run the cleanup script (scripts/clean.sh --remove-all) and delete the code directory. More information: https://devpu.sh/docs/installation/#development"
+  err "This script is for production only. For development, stop and clean the stack, then remove the checkout. See https://docs.layerrail.com."
   exit 1
 fi
 
@@ -48,12 +48,17 @@ if [[ "$cwd" == "$APP_DIR"* ]] || [[ "$cwd" == "$DATA_DIR"* ]]; then
   exit 1
 fi
 
-if [[ "$(whoami)" == "devpush" ]] || [[ "${SUDO_USER:-}" == "devpush" ]]; then
-  err "Cannot run as user 'devpush' (user will be deleted). Run as root or another user."
+service_user="$(default_service_user)"
+if [[ "$(whoami)" == "$service_user" ]] || [[ "${SUDO_USER:-}" == "$service_user" ]]; then
+  err "Cannot run as service user '$service_user' (the user will be deleted). Run as root or another user."
   exit 1
 fi
 
 cleanup_systemd_unit() {
+  systemctl stop layerrail.service || true
+  systemctl disable layerrail.service || true
+  rm -f /etc/systemd/system/layerrail.service || true
+  systemctl reset-failed layerrail.service || true
   systemctl stop devpush.service || true
   systemctl disable devpush.service || true
   rm -f /etc/systemd/system/devpush.service || true
@@ -63,7 +68,7 @@ cleanup_systemd_unit() {
 }
 
 # Detect installation and save telemetry data
-user="devpush"
+user="$service_user"
 version_ref=""
 telemetry_payload=""
 user_home="$(getent passwd "$user" | cut -d: -f6 2>/dev/null || true)"
@@ -114,7 +119,7 @@ fi
 # Warning/confirmation
 if (( yes_flag == 0 )); then
   printf '\n'
-  printf "${YEL}This will permanently remove /dev/push. Services will be stopped and files deleted.${NC}\n"
+  printf "${YEL}This will permanently remove LayerRail. Services will be stopped and files deleted.${NC}\n"
   printf '\n'
   read -r -p "Proceed with uninstall? [y/N] " ans
   if [[ ! "$ans" =~ ^[Yy]([Ee][Ss])?$ ]]; then
@@ -136,7 +141,7 @@ printf '\n'
 printf "Removing Docker resources\n"
 
 # Remove Docker containers
-compose_containers="$(docker ps -a --filter "label=com.docker.compose.project=devpush" -q 2>/dev/null || true)"
+compose_containers="$(docker ps -a --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" -q 2>/dev/null || true)"
 runner_containers="$(docker ps -a --filter "label=devpush.deployment_id" -q 2>/dev/null || true)"
 containers="$(printf "%s\n%s\n" "$compose_containers" "$runner_containers" | grep -v '^\s*$' | sort -u || true)"
 if [[ -n "$containers" ]]; then
@@ -145,7 +150,7 @@ if [[ -n "$containers" ]]; then
 fi
 
 # Remove Docker images
-compose_images="$(docker images --filter "reference=devpush*" -q 2>/dev/null || true)"
+compose_images="$(printf "%s\n%s\n" "$(docker images --filter "reference=devpush*" -q 2>/dev/null || true)" "$(docker images --filter "reference=layerrail*" -q 2>/dev/null || true)" | sort -u)"
 legacy_runner_images="$(docker images --filter "reference=runner-*" -q 2>/dev/null || true)"
 runner_images="$(docker images --filter "reference=ghcr.io/devpushhq/runner-*" -q 2>/dev/null || true)"
 override_images=""

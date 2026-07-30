@@ -16,9 +16,15 @@ from arq.jobs import Job, JobStatus
 from models import Deployment, Alias, Project, User, Domain
 from utils.environment import get_environment_for_branch
 from config import Settings, get_settings
+from services.audit import AuditService
+from services.deployment_policy import (
+    DeploymentPolicyError,
+    DeploymentPolicyService,
+)
 from services.registry import RegistryService
 from services.deployment_diagnostics import DeploymentDiagnosticService
 from services.deployment_nodes import DeploymentNodeService
+from services.notifications import NotificationService
 from services.node_runtime import deployment_runtime_client
 from services.storage import RuntimeStorage, StorageService
 
@@ -193,54 +199,67 @@ class DeploymentService:
         project = deployment.project
         environment = deployment.environment or {}
 
-        runtime_vars: dict[str, str] = {
-            "DEVPUSH": "true",
+        layerrail_vars: dict[str, str] = {
+            "LAYERRAIL": "true",
             "PORT": "8000",
             "HOST": "0.0.0.0",
             "HOSTNAME": "0.0.0.0",
-            "DEVPUSH_URL": deployment.url,
-            "DEVPUSH_DOMAIN": deployment.hostname,
-            "DEVPUSH_TEAM_ID": project.team_id,
-            "DEVPUSH_PROJECT_ID": project.id,
-            "DEVPUSH_ENVIRONMENT": environment.get("slug") or deployment.environment_id,
-            "DEVPUSH_DEPLOYMENT_ID": deployment.id,
-            "DEVPUSH_DEPLOYMENT_CREATED_AT": deployment.created_at.isoformat() + "Z",
-            "DEVPUSH_GIT_PROVIDER": "github",
-            "DEVPUSH_GIT_REPO": deployment.repo_full_name,
-            "DEVPUSH_GIT_REF": deployment.branch,
-            "DEVPUSH_GIT_COMMIT_SHA": deployment.commit_sha,
+            "LAYERRAIL_URL": deployment.url,
+            "LAYERRAIL_DOMAIN": deployment.hostname,
+            "LAYERRAIL_TEAM_ID": project.team_id,
+            "LAYERRAIL_PROJECT_ID": project.id,
+            "LAYERRAIL_ENVIRONMENT": environment.get("slug")
+            or deployment.environment_id,
+            "LAYERRAIL_DEPLOYMENT_ID": deployment.id,
+            "LAYERRAIL_DEPLOYMENT_CREATED_AT": deployment.created_at.isoformat()
+            + "Z",
+            "LAYERRAIL_GIT_PROVIDER": "github",
+            "LAYERRAIL_GIT_REPO": deployment.repo_full_name,
+            "LAYERRAIL_GIT_REF": deployment.branch,
+            "LAYERRAIL_GIT_COMMIT_SHA": deployment.commit_sha,
             "PUID": str(settings.service_uid),
             "PGID": str(settings.service_gid),
         }
 
         if settings.server_ip:
-            runtime_vars["DEVPUSH_IP"] = settings.server_ip
+            layerrail_vars["LAYERRAIL_IP"] = settings.server_ip
 
         alias_domains = self.get_alias_domains(deployment, settings)
 
         if alias_domains.get("environment_domain"):
-            runtime_vars["DEVPUSH_DOMAIN_ENVIRONMENT"] = alias_domains[
+            layerrail_vars["LAYERRAIL_DOMAIN_ENVIRONMENT"] = alias_domains[
                 "environment_domain"
             ]
         if alias_domains.get("environment_url"):
-            runtime_vars["DEVPUSH_URL_ENVIRONMENT"] = alias_domains["environment_url"]
+            layerrail_vars["LAYERRAIL_URL_ENVIRONMENT"] = alias_domains[
+                "environment_url"
+            ]
         if alias_domains.get("branch_domain"):
-            runtime_vars["DEVPUSH_DOMAIN_BRANCH"] = alias_domains["branch_domain"]
+            layerrail_vars["LAYERRAIL_DOMAIN_BRANCH"] = alias_domains[
+                "branch_domain"
+            ]
         if alias_domains.get("branch_url"):
-            runtime_vars["DEVPUSH_URL_BRANCH"] = alias_domains["branch_url"]
+            layerrail_vars["LAYERRAIL_URL_BRANCH"] = alias_domains["branch_url"]
 
         if deployment.commit_meta:
             author = deployment.commit_meta.get("author")
             message = deployment.commit_meta.get("message")
             if author:
-                runtime_vars["DEVPUSH_GIT_COMMIT_AUTHOR"] = author
+                layerrail_vars["LAYERRAIL_GIT_COMMIT_AUTHOR"] = author
             if message:
-                runtime_vars["DEVPUSH_GIT_COMMIT_MESSAGE"] = message
+                layerrail_vars["LAYERRAIL_GIT_COMMIT_MESSAGE"] = message
 
         if deployment.repo_full_name and "/" in deployment.repo_full_name:
             owner, repo = deployment.repo_full_name.split("/", 1)
-            runtime_vars["DEVPUSH_GIT_REPO_OWNER"] = owner
-            runtime_vars["DEVPUSH_GIT_REPO_NAME"] = repo
+            layerrail_vars["LAYERRAIL_GIT_REPO_OWNER"] = owner
+            layerrail_vars["LAYERRAIL_GIT_REPO_NAME"] = repo
+
+        runtime_vars = dict(layerrail_vars)
+        for key, value in layerrail_vars.items():
+            if key == "LAYERRAIL":
+                runtime_vars["DEVPUSH"] = value
+            elif key.startswith("LAYERRAIL_"):
+                runtime_vars["DEVPUSH_" + key.removeprefix("LAYERRAIL_")] = value
 
         for key, value in runtime_vars.items():
             if value is not None and value != "":
@@ -594,7 +613,7 @@ class DeploymentService:
             trigger=trigger,
             node=node,
             created_by_user_id=current_user.id
-            if trigger == "user" and current_user
+            if trigger in {"user", "api"} and current_user
             else None,
         )
         db.add(deployment)
@@ -643,6 +662,10 @@ class DeploymentService:
 
         lock = self.environment_lock(redis_client, project.id, environment["id"])
         superseded: list[Deployment] = []
+        policy = DeploymentPolicyService.from_project(project)
+        has_explicit_policy = DeploymentPolicyService.KEY in (
+            getattr(project, "config", None) or {}
+        )
 
         async with lock:
             provider_event_id = str(commit.get("provider_event_id") or "").strip()
@@ -663,6 +686,31 @@ class DeploymentService:
                         existing.id,
                     )
                     return existing
+
+            if has_explicit_policy:
+                active_result = await db.execute(
+                    select(Deployment).where(
+                        Deployment.project_id == project.id,
+                        Deployment.environment_id == environment["id"],
+                        Deployment.conclusion.is_(None),
+                        Deployment.status.in_(["prepare", "deploy", "finalize"]),
+                    )
+                )
+                active = list(active_result.scalars())
+                if trigger == "webhook" and policy.supersede_older:
+                    active = [
+                        item
+                        for item in active
+                        if not (
+                            item.trigger == "webhook"
+                            and item.branch == branch
+                            and item.status in {"prepare", "deploy"}
+                        )
+                    ]
+                if len(active) >= policy.max_concurrent:
+                    raise DeploymentPolicyError(
+                        "This environment has reached its concurrent deployment limit."
+                    )
 
             deployment = await self.create(
                 project=project,
@@ -710,7 +758,24 @@ class DeploymentService:
                 )
                 raise
 
-            if trigger == "webhook":
+            team_id = getattr(project, "team_id", None)
+            if team_id:
+                await AuditService.record(
+                    db,
+                    team_id=team_id,
+                    user=current_user,
+                    action="deployment.created",
+                    resource_type="deployment",
+                    resource_id=deployment.id,
+                    metadata={
+                        "project_id": project.id,
+                        "branch": branch,
+                        "commit_sha": deployment.commit_sha,
+                        "trigger": trigger,
+                    },
+                )
+
+            if trigger == "webhook" and policy.supersede_older:
                 superseded = await self._mark_superseded_webhook_deployments(
                     replacement=deployment,
                     db=db,
@@ -721,6 +786,47 @@ class DeploymentService:
         for outdated in superseded:
             await self._abort_job(outdated, queue)
             await self._stop_container(outdated, db)
+            try:
+                team_id = getattr(project, "team_id", None)
+                if not team_id:
+                    continue
+                await NotificationService.emit(
+                    db,
+                    queue,
+                    team_id=team_id,
+                    event="deployment.skipped",
+                    payload=NotificationService.deployment_payload(
+                        outdated,
+                        project=project,
+                    ),
+                )
+            except Exception:
+                logger.warning(
+                    "Could not queue skipped notification for deployment %s.",
+                    outdated.id,
+                    exc_info=True,
+                )
+
+        try:
+            team_id = getattr(project, "team_id", None)
+            if not team_id:
+                return deployment
+            await NotificationService.emit(
+                db,
+                queue,
+                team_id=team_id,
+                event="deployment.created",
+                payload=NotificationService.deployment_payload(
+                    deployment,
+                    project=project,
+                ),
+            )
+        except Exception:
+            logger.warning(
+                "Could not queue creation notification for deployment %s.",
+                deployment.id,
+                exc_info=True,
+            )
 
         return deployment
 
@@ -984,6 +1090,36 @@ class DeploymentService:
         await self._queue_cleanup(deployment, queue)
         await self._abort_job(deployment, queue)
         await self._stop_container(deployment, db)
+
+        team_id = getattr(project, "team_id", None)
+        if team_id:
+            await AuditService.record(
+                db,
+                team_id=team_id,
+                action="deployment.canceled",
+                resource_type="deployment",
+                resource_id=deployment.id,
+                metadata={"project_id": project.id},
+            )
+        try:
+            if not team_id:
+                return deployment
+            await NotificationService.emit(
+                db,
+                queue,
+                team_id=team_id,
+                event="deployment.canceled",
+                payload=NotificationService.deployment_payload(
+                    deployment,
+                    project=project,
+                ),
+            )
+        except Exception:
+            logger.warning(
+                "Could not queue cancellation notification for deployment %s.",
+                deployment.id,
+                exc_info=True,
+            )
 
         return deployment
 

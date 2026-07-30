@@ -7,6 +7,9 @@
 !.env.dev.example
 !.env.prod.example
 !.env.node.example
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
 
 # Python
 __pycache__/

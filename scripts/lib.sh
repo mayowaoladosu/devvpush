@@ -28,10 +28,10 @@ info(){ printf "%s\n" "$*"; }
 VERBOSE="${VERBOSE:-0}"
 
 # Log files
-CMD_LOG="${TMPDIR:-/tmp}/devpush-cmd.$$.log"
+CMD_LOG="${TMPDIR:-/tmp}/layerrail-cmd.$$.log"
 
 # Detect environment (production or development)
-ENVIRONMENT="${DEVPUSH_ENV:-}"
+ENVIRONMENT="${LAYERRAIL_ENV:-${DEVPUSH_ENV:-}}"
 if [[ -z "$ENVIRONMENT" ]]; then
   if [[ "$(uname)" == "Darwin" ]]; then
     ENVIRONMENT="development"
@@ -42,15 +42,25 @@ fi
 
 # Application, data, log, and backup paths
 if [[ "$ENVIRONMENT" == "production" ]]; then
-  APP_DIR="${DEVPUSH_APP_DIR:-/opt/devpush}"
-  DATA_DIR="${DEVPUSH_DATA_DIR:-/var/lib/devpush}"
-  LOG_DIR="${DEVPUSH_LOG_DIR:-/var/log/devpush}"
-  BACKUP_DIR="${DEVPUSH_BACKUP_DIR:-/var/backups/devpush}"
+  default_app_dir="/opt/layerrail"
+  default_data_dir="/var/lib/layerrail"
+  default_log_dir="/var/log/layerrail"
+  default_backup_dir="/var/backups/layerrail"
+  if [[ -d /opt/devpush/.git && ! -d /opt/layerrail/.git ]]; then
+    default_app_dir="/opt/devpush"
+    default_data_dir="/var/lib/devpush"
+    default_log_dir="/var/log/devpush"
+    default_backup_dir="/var/backups/devpush"
+  fi
+  APP_DIR="${LAYERRAIL_APP_DIR:-${DEVPUSH_APP_DIR:-$default_app_dir}}"
+  DATA_DIR="${LAYERRAIL_DATA_DIR:-${DEVPUSH_DATA_DIR:-$default_data_dir}}"
+  LOG_DIR="${LAYERRAIL_LOG_DIR:-${DEVPUSH_LOG_DIR:-$default_log_dir}}"
+  BACKUP_DIR="${LAYERRAIL_BACKUP_DIR:-${DEVPUSH_BACKUP_DIR:-$default_backup_dir}}"
 else
-  APP_DIR="${DEVPUSH_APP_DIR:-$PROJECT_ROOT}"
-  DATA_DIR="${DEVPUSH_DATA_DIR:-$APP_DIR/data}"
-  LOG_DIR="${DEVPUSH_LOG_DIR:-$APP_DIR/logs}"
-  BACKUP_DIR="${DEVPUSH_BACKUP_DIR:-$APP_DIR/backups}"
+  APP_DIR="${LAYERRAIL_APP_DIR:-${DEVPUSH_APP_DIR:-$PROJECT_ROOT}}"
+  DATA_DIR="${LAYERRAIL_DATA_DIR:-${DEVPUSH_DATA_DIR:-$APP_DIR/data}}"
+  LOG_DIR="${LAYERRAIL_LOG_DIR:-${DEVPUSH_LOG_DIR:-$APP_DIR/logs}}"
+  BACKUP_DIR="${LAYERRAIL_BACKUP_DIR:-${DEVPUSH_BACKUP_DIR:-$APP_DIR/backups}}"
 fi
 
 # Environment file, version file
@@ -314,7 +324,7 @@ _script_err_trap() {
 # Initialize script logging
 init_script_logging() {
   local name="${1:-$(basename "$0" .sh)}"
-  local log_dir="${LOG_DIR:-/var/log/devpush}"
+  local log_dir="${LOG_DIR:-/var/log/layerrail}"
   CURRENT_SCRIPT_NAME="$name"
 
   install -d -m 0750 "$log_dir" >/dev/null 2>&1 || true
@@ -522,7 +532,7 @@ validate_component() {
 }
 
 # Service user (used for ownership + container UID/GID)
-SERVICE_USER="${DEVPUSH_SERVICE_USER:-}"
+SERVICE_USER="${LAYERRAIL_SERVICE_USER:-${DEVPUSH_SERVICE_USER:-}}"
 SERVICE_UID="${SERVICE_UID:-}"
 SERVICE_GID="${SERVICE_GID:-}"
 
@@ -538,12 +548,16 @@ default_service_user() {
   fi
 
   if [[ "$ENVIRONMENT" == "production" ]]; then
-    printf "devpush\n"
+    if id -u devpush >/dev/null 2>&1 && ! id -u layerrail >/dev/null 2>&1; then
+      printf "devpush\n"
+    else
+      printf "layerrail\n"
+    fi
   else
     if command -v id >/dev/null 2>&1; then
       id -un
     else
-      printf "%s\n" "${USER:-devpush}"
+      printf "%s\n" "${USER:-layerrail}"
     fi
   fi
 }
@@ -556,7 +570,7 @@ set_service_ids() {
   elif [[ -n "${DEVPUSH_SERVICE_USER:-}" ]]; then
     candidate="$DEVPUSH_SERVICE_USER"
   elif [[ "$ENVIRONMENT" == "production" ]]; then
-    candidate="devpush"
+    candidate="$(default_service_user)"
   else
     candidate="$(id -un)"
   fi
@@ -596,10 +610,12 @@ ensure_acme_json() {
 }
 
 # Docker compose variables
+COMPOSE_PROJECT="${LAYERRAIL_COMPOSE_PROJECT:-${DEVPUSH_COMPOSE_PROJECT:-devpush}}"
 COMPOSE_BIN=()
 COMPOSE_ARGS=()
 COMPOSE_ENV=()
 COMPOSE_BASE=()
+export COMPOSE_PROJECT
 
 # Detect compose command (`docker compose` preferred)
 set_compose_cmd() {
@@ -624,7 +640,7 @@ set_compose_base() {
   fi
 
   local ssl="$(get_cert_challenge_provider)"
-  COMPOSE_ARGS=(-p devpush -f "$APP_DIR/compose/base.yml")
+  COMPOSE_ARGS=(-p "$COMPOSE_PROJECT" -f "$APP_DIR/compose/base.yml")
   if [[ "$ENVIRONMENT" == "production" ]]; then
     COMPOSE_ARGS+=(-f "$APP_DIR/compose/override.yml")
     COMPOSE_ARGS+=(-f "$APP_DIR/compose/ssl-${ssl}.yml")
@@ -642,7 +658,7 @@ set_compose_base() {
 
 # Check if any devpush containers are running
 is_stack_running() {
-  docker ps --filter "label=com.docker.compose.project=devpush" --format "{{.ID}}" 2>/dev/null | grep -q .
+  docker ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" --format "{{.ID}}" 2>/dev/null | grep -q .
 }
 
 # Fetch public IP and persist unless --no-save
@@ -677,7 +693,8 @@ get_public_ip() {
 send_telemetry() {
   local event="$1"
   local payload="${2:-}"
-  local endpoint="https://api.devpu.sh/v1/telemetry"
+  local endpoint="${LAYERRAIL_TELEMETRY_ENDPOINT:-}"
+  [[ -n "$endpoint" ]] || return 0
 
   if [[ -z "$payload" ]]; then
     [[ -f "$VERSION_FILE" ]] || return 0
@@ -686,12 +703,12 @@ send_telemetry() {
   fi
 
   for attempt in 1 2 3; do
-    if curl -fsSL -X POST -H 'Content-Type: application/json' -d "$payload" "$endpoint" >/tmp/devpush_telemetry.log 2>&1; then
+    if curl -fsSL -X POST -H 'Content-Type: application/json' -d "$payload" "$endpoint" >/tmp/layerrail_telemetry.log 2>&1; then
       printf "Telemetry attempt %s succeeded.\n" "$attempt"
-      rm -f /tmp/devpush_telemetry.log
+      rm -f /tmp/layerrail_telemetry.log
       return 0
     fi
-    cat /tmp/devpush_telemetry.log 2>/dev/null || true
+    cat /tmp/layerrail_telemetry.log 2>/dev/null || true
     [[ $attempt -lt 3 ]] && sleep 1
   done
 

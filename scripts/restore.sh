@@ -236,7 +236,7 @@ if (( restore_db == 1 )); then
   printf "Restoring database\n"
   set_compose_base
   run_cmd "${CHILD_MARK} Starting pgsql" "${COMPOSE_BASE[@]}" up -d pgsql
-  pg_container="$(docker ps --filter "label=com.docker.compose.project=devpush" --filter "label=com.docker.compose.service=pgsql" --format '{{.ID}}' | head -n1 || true)"
+  pg_container="$(docker ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" --filter "label=com.docker.compose.service=pgsql" --format '{{.ID}}' | head -n1 || true)"
   if [[ -z "$pg_container" ]]; then
     err "pgsql container did not start. Inspect logs with: scripts/compose.sh logs pgsql"
     exit 1

@@ -1,4 +1,4 @@
-This folder ships a default registry catalog with /dev/push so installs can run without
+This folder ships a default registry catalog with LayerRail so installs can run without
 network access to the remote registry.
 
 What this is:
@@ -46,14 +46,15 @@ Notes:
 - Edit `overrides.json` to enable/disable entries or override specific fields.
 - Keep reusable framework signatures in the app-versioned framework catalog,
   not instance overrides.
-- `catalog.json` `meta.source` is `bundled` for the copy shipped with /dev/push and
+- `catalog.json` `meta.source` is `bundled` for the copy shipped with LayerRail and
   `registry` for catalogs fetched from the registry.
 - Catalog format: see the registry repository README:
   https://github.com/devpushhq/registry/blob/main/README.md
 
 ## Dependency-cache contract
 
-Official `ghcr.io/devpushhq/runner-*` images automatically participate in
+Official runner images currently remain at `ghcr.io/devpushhq/runner-*` as an
+upstream compatibility dependency and automatically participate in
 dependency caching and configure their package managers beneath `/cache`.
 Custom runners can opt in with `"cache_directory": "/cache"`; no other target is
 accepted. An opted-in image must start as root, make `/cache` writable by the

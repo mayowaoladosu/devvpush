@@ -14,7 +14,7 @@
       <mj-column padding="0">
         <mj-text padding="0">
           <div style="border: 1px solid #e5e5e5; border-radius: 14px; color: #0a0a0a; padding: 24px;">
-            <img src="{{ email_logo }}" height="24" width="24" style="display: block; margin-bottom: 16px;" />
+            <div style="color:#6d45da;font-size:18px;font-weight:700;letter-spacing:-0.3px;margin-bottom:16px;">◆ LayerRail</div>
             <h1 style="color: #0a0a0a; font-size: 24px; font-weight: 600; margin: 0 0 12px;">{{ _('You\'ve been invited to join %(team_name)s', team_name=team_name) }}</h1>
             <p style="color: #0a0a0a; margin: 0 0 16px;">{{ _('%(inviter_name)s has invited you to collaborate on their team. Click the button below to accept the invitation.', inviter_name=inviter_name) }}</p>
             <a href="{{ invite_link }}" style="display: inline-block; background: #0a0a0a; color: #fafafa; padding: 8px 16px; border-radius: 8px; font-weight: 500; text-decoration: none;">{{ _('Join %(team_name)s', team_name=team_name) }}</a>

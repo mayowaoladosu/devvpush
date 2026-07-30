@@ -179,55 +179,55 @@ class DockerMetricsExporter:
     ) -> str:
         metrics = (
             (
-                "devpush_deployment_cpu_seconds_total",
+                "layerrail_deployment_cpu_seconds_total",
                 "counter",
                 "Cumulative CPU time consumed by a deployment container.",
                 "cpu_seconds",
             ),
             (
-                "devpush_deployment_online_cpus",
+                "layerrail_deployment_online_cpus",
                 "gauge",
                 "Online CPUs visible to a deployment container.",
                 "online_cpus",
             ),
             (
-                "devpush_deployment_memory_working_set_bytes",
+                "layerrail_deployment_memory_working_set_bytes",
                 "gauge",
                 "Container memory usage excluding inactive file cache.",
                 "memory_working_set_bytes",
             ),
             (
-                "devpush_deployment_memory_limit_bytes",
+                "layerrail_deployment_memory_limit_bytes",
                 "gauge",
                 "Container memory limit reported by Docker.",
                 "memory_limit_bytes",
             ),
             (
-                "devpush_deployment_network_receive_bytes_total",
+                "layerrail_deployment_network_receive_bytes_total",
                 "counter",
                 "Cumulative bytes received across container interfaces.",
                 "network_receive_bytes",
             ),
             (
-                "devpush_deployment_network_transmit_bytes_total",
+                "layerrail_deployment_network_transmit_bytes_total",
                 "counter",
                 "Cumulative bytes transmitted across container interfaces.",
                 "network_transmit_bytes",
             ),
             (
-                "devpush_deployment_block_read_bytes_total",
+                "layerrail_deployment_block_read_bytes_total",
                 "counter",
                 "Cumulative block-device bytes read by a deployment.",
                 "block_read_bytes",
             ),
             (
-                "devpush_deployment_block_write_bytes_total",
+                "layerrail_deployment_block_write_bytes_total",
                 "counter",
                 "Cumulative block-device bytes written by a deployment.",
                 "block_write_bytes",
             ),
             (
-                "devpush_deployment_pids",
+                "layerrail_deployment_pids",
                 "gauge",
                 "Current process count in a deployment container.",
                 "pids",
@@ -243,8 +243,8 @@ class DockerMetricsExporter:
 
         lines.extend(
             (
-                "# HELP devpush_deployment_info Deployment container metadata.",
-                "# TYPE devpush_deployment_info gauge",
+                "# HELP layerrail_deployment_info Deployment container metadata.",
+                "# TYPE layerrail_deployment_info gauge",
             )
         )
         for item in values:
@@ -256,20 +256,21 @@ class DockerMetricsExporter:
                     "image": item.image,
                 },
             )
-            lines.append(f"devpush_deployment_info{info_labels} 1")
+            lines.append(f"layerrail_deployment_info{info_labels} 1")
 
         lines.extend(
             (
-                "# HELP devpush_metrics_exporter_scrape_duration_seconds Time spent collecting Docker stats.",
-                "# TYPE devpush_metrics_exporter_scrape_duration_seconds gauge",
-                "devpush_metrics_exporter_scrape_duration_seconds "
+                "# HELP layerrail_metrics_exporter_scrape_duration_seconds Time spent collecting Docker stats.",
+                "# TYPE layerrail_metrics_exporter_scrape_duration_seconds gauge",
+                "layerrail_metrics_exporter_scrape_duration_seconds "
                 f"{cls._number(scrape_duration_seconds)}",
-                "# HELP devpush_metrics_exporter_containers Number of deployment containers exported.",
-                "# TYPE devpush_metrics_exporter_containers gauge",
-                f"devpush_metrics_exporter_containers {len(values)}",
+                "# HELP layerrail_metrics_exporter_containers Number of deployment containers exported.",
+                "# TYPE layerrail_metrics_exporter_containers gauge",
+                f"layerrail_metrics_exporter_containers {len(values)}",
             )
         )
-        return "\n".join(lines) + "\n"
+        canonical = "\n".join(lines) + "\n"
+        return canonical + canonical.replace("layerrail_", "devpush_")
 
     async def export(self) -> str:
         started = time.monotonic()

@@ -1,0 +1,4 @@
+{
+  "components": "app,worker-jobs,worker-monitor,metrics-exporter",
+  "reason": "Launch LayerRail branding, API, CLI, policy, audit, rate limits, and notifications"
+}

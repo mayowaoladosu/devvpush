@@ -68,14 +68,14 @@ class PrometheusMonitoringService:
         )
         rate_window = "1m" if window.duration <= timedelta(hours=6) else "5m"
         queries = {
-            "cpu": f"sum(rate(devpush_deployment_cpu_seconds_total{{{selector}}}[{rate_window}]))",
-            "memory": f"max(devpush_deployment_memory_working_set_bytes{{{selector}}})",
-            "memory_limit": f"max(devpush_deployment_memory_limit_bytes{{{selector}}})",
-            "network_receive": f"sum(rate(devpush_deployment_network_receive_bytes_total{{{selector}}}[{rate_window}]))",
-            "network_transmit": f"sum(rate(devpush_deployment_network_transmit_bytes_total{{{selector}}}[{rate_window}]))",
-            "block_read": f"sum(rate(devpush_deployment_block_read_bytes_total{{{selector}}}[{rate_window}]))",
-            "block_write": f"sum(rate(devpush_deployment_block_write_bytes_total{{{selector}}}[{rate_window}]))",
-            "pids": f"max(devpush_deployment_pids{{{selector}}})",
+            "cpu": f"sum(rate(layerrail_deployment_cpu_seconds_total{{{selector}}}[{rate_window}]))",
+            "memory": f"max(layerrail_deployment_memory_working_set_bytes{{{selector}}})",
+            "memory_limit": f"max(layerrail_deployment_memory_limit_bytes{{{selector}}})",
+            "network_receive": f"sum(rate(layerrail_deployment_network_receive_bytes_total{{{selector}}}[{rate_window}]))",
+            "network_transmit": f"sum(rate(layerrail_deployment_network_transmit_bytes_total{{{selector}}}[{rate_window}]))",
+            "block_read": f"sum(rate(layerrail_deployment_block_read_bytes_total{{{selector}}}[{rate_window}]))",
+            "block_write": f"sum(rate(layerrail_deployment_block_write_bytes_total{{{selector}}}[{rate_window}]))",
+            "pids": f"max(layerrail_deployment_pids{{{selector}}})",
         }
         try:
             results = await asyncio.gather(

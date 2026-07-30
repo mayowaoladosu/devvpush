@@ -80,7 +80,7 @@ class MediaProviderServiceTests(unittest.IsolatedAsyncioTestCase):
             service.validate_endpoint_policy(config)
 
     async def test_verify_uploads_reads_and_deletes_temporary_asset(self):
-        public_id = f"devpush_connection_tests/{'a' * 32}"
+        public_id = f"layerrail_connection_tests/{'a' * 32}"
         calls = []
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -124,7 +124,7 @@ class MediaProviderServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_failed_read_still_removes_temporary_asset(self):
-        public_id = f"devpush_connection_tests/{'b' * 32}"
+        public_id = f"layerrail_connection_tests/{'b' * 32}"
         destroyed = False
 
         def handler(request: httpx.Request) -> httpx.Response:

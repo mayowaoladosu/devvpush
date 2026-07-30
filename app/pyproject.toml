@@ -1,7 +1,7 @@
 [project]
-name = "devpush-app"
-version = "0.1.0"
-description = "Web app for devpush"
+name = "layerrail-control-plane"
+version = "1.0.0"
+description = "Self-hosted LayerRail deployment control plane"
 readme = "README.md"
 requires-python = "==3.13.*"
 dependencies = [

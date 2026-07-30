@@ -11,7 +11,7 @@ usage(){
   cat <<USG
 Usage: restart.sh [--components <csv>] [--no-migrate] [-h|--help]
 
-Restart the /dev/push stack (stop + start).
+Restart the LayerRail stack (stop + start).
 
   --components <csv>
                     Comma-separated list of services to restart (${VALID_COMPONENTS//|/, })

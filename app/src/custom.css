@@ -1,3 +1,19 @@
+:root {
+  --primary: oklch(0.62 0.2 292);
+  --primary-foreground: oklch(0.985 0.01 292);
+  --ring: oklch(0.62 0.2 292);
+}
+
+.dark {
+  --primary: oklch(0.72 0.18 292);
+  --primary-foreground: oklch(0.16 0.03 292);
+  --ring: oklch(0.72 0.18 292);
+}
+
+::selection {
+  background: color-mix(in oklab, #8b67f2 35%, transparent);
+}
+
 .htmx-indicator {
   transition-behavior: allow-discrete;
   @apply invisible opacity-0 transition-all;
@@ -43,7 +59,7 @@
 }
 
 body:after {
-  @apply content-[''] fixed top-0 left-0 h-0.5 bg-blue-600 dark:bg-blue-500 z-[999] opacity-0 w-0 transition-[opacity,width] pointer-events-none;
+  @apply content-[''] fixed top-0 left-0 h-0.5 bg-purple-600 dark:bg-purple-400 z-[999] opacity-0 w-0 transition-[opacity,width] pointer-events-none;
 }
 body.loading:after {
   @apply opacity-100 animate-[progress-bar_4s_linear_forwards];

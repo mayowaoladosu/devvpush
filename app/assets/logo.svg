@@ -1,4 +1,21 @@
-<svg width="120" height="120" viewBox="0 0 120 120" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-<path d="M39.9265 17L16.5652 103.791H0L23.3612 17H39.9265Z"/>
-<path d="M81.7018 98.5804L71.6494 88.5988L92.6037 67.6445H47.1555V52.9198H92.6037L71.6494 31.9655L81.7018 21.9839L120 60.2822L81.7018 98.5804Z"/>
+<svg width="340" height="84" viewBox="0 0 340 84" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title">
+	<title id="title">LayerRail</title>
+	<defs>
+		<linearGradient id="lr-a" x1="8" y1="7" x2="76" y2="76" gradientUnits="userSpaceOnUse">
+			<stop stop-color="#C79BFF"/>
+			<stop offset="0.5" stop-color="#8B67F2"/>
+			<stop offset="1" stop-color="#4B24B7"/>
+		</linearGradient>
+	</defs>
+	<g fill="url(#lr-a)">
+		<path d="M8 31.5 36.5 15v18L19 39.5 8 36v-4.5Z"/>
+		<path d="m42 12 34 19.5V36l-13 4-21-7V12Z"/>
+		<path d="M8 44.5 36.5 37v17L8 55.5v-11Z"/>
+		<path d="m42 37 34 8v10.5L42 54V37Z"/>
+		<path d="m15 61 21.5-3v8L23 73H10l5-12Z"/>
+		<path d="m42 58 28 4 6 11H62L42 66v-8Z"/>
+		<path d="M34 69h16l5 4H29l5-4Z" opacity=".86"/>
+		<path d="M38 63h8l3 3H35l3-3Z" opacity=".72"/>
+	</g>
+	<text x="92" y="57" fill="currentColor" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="45" font-weight="650" letter-spacing="-2.2">LayerRail</text>
 </svg>

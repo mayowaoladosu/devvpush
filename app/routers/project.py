@@ -56,6 +56,7 @@ from forms.project import (
     ProjectDomainVerifyForm,
     ProjectDependencyCacheClearForm,
     ProjectDependencyCacheForm,
+    ProjectDeploymentPolicyForm,
     ProjectResourcesForm,
 )
 from forms.storage import (
@@ -70,6 +71,11 @@ from services.github_installation import GitHubInstallationService
 from services.dependency_cache import DependencyCacheService
 from services.deployment_diagnostics import DeploymentDiagnosticService
 from services.deployment import DeploymentService
+from services.audit import AuditService
+from services.deployment_policy import (
+    DeploymentPolicyError,
+    DeploymentPolicyService,
+)
 from services.monitoring import PrometheusMonitoringService, WINDOWS
 from services.storage import StorageConfigurationError, StorageService
 from services.storage_jobs import StorageJobs
@@ -2063,6 +2069,62 @@ async def project_settings(
                 },
             )
 
+    deployment_policy = DeploymentPolicyService.from_project(project)
+    deployment_policy_form: Any = await ProjectDeploymentPolicyForm.from_formdata(
+        request,
+        data={
+            "webhook_enabled": deployment_policy.webhook_enabled,
+            "allowed_branches": "\n".join(deployment_policy.allowed_branches),
+            "ignored_branches": "\n".join(deployment_policy.ignored_branches),
+            "ignored_authors": "\n".join(deployment_policy.ignored_authors),
+            "skip_message_tokens": "\n".join(
+                deployment_policy.skip_message_tokens
+            ),
+            "max_concurrent": deployment_policy.max_concurrent,
+            "supersede_older": deployment_policy.supersede_older,
+        },
+    )
+
+    if fragment == "deployment_policy":
+        if await deployment_policy_form.validate_on_submit():
+            try:
+                deployment_policy = DeploymentPolicyService.update_project(
+                    project,
+                    webhook_enabled=deployment_policy_form.webhook_enabled.data,
+                    allowed_branches=deployment_policy_form.allowed_branches.data,
+                    ignored_branches=deployment_policy_form.ignored_branches.data,
+                    ignored_authors=deployment_policy_form.ignored_authors.data,
+                    skip_message_tokens=deployment_policy_form.skip_message_tokens.data,
+                    max_concurrent=deployment_policy_form.max_concurrent.data,
+                    supersede_older=deployment_policy_form.supersede_older.data,
+                )
+                await db.commit()
+                await AuditService.record(
+                    db,
+                    team_id=team.id,
+                    user=current_user,
+                    request=request,
+                    action="project.deployment_policy_updated",
+                    resource_type="project",
+                    resource_id=project.id,
+                    metadata=deployment_policy.as_dict(),
+                )
+                flash(request, _("Deployment policy updated."), "success")
+            except DeploymentPolicyError as exc:
+                deployment_policy_form.max_concurrent.errors = [str(exc)]
+
+        if request.headers.get("HX-Request"):
+            return TemplateResponse(
+                request=request,
+                name="project/partials/_settings-deployment-policy.html",
+                context={
+                    "current_user": current_user,
+                    "team": team,
+                    "project": project,
+                    "deployment_policy_form": deployment_policy_form,
+                },
+            )
+
     # Dependency cache
     dependency_cache_service = DependencyCacheService(
         settings, registry_state.runners
@@ -2373,6 +2435,7 @@ async def project_settings(
             "environment_form": environment_form,
             "remove_environment_form": remove_environment_form,
             "build_and_deploy_form": build_and_deploy_form,
+            "deployment_policy_form": deployment_policy_form,
             "dependency_cache_form": dependency_cache_form,
             "dependency_cache_clear_form": dependency_cache_clear_form,
             "dependency_cache_generation": dependency_cache_generation,

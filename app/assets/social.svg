@@ -1,0 +1,13 @@
+<svg width="1200" height="630" viewBox="0 0 1200 630" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="78" y1="48" x2="1100" y2="612" gradientUnits="userSpaceOnUse"><stop stop-color="#17102B"/><stop offset="1" stop-color="#08070D"/></linearGradient>
+    <linearGradient id="mark" x1="115" y1="150" x2="420" y2="500" gradientUnits="userSpaceOnUse"><stop stop-color="#D3ACFF"/><stop offset=".5" stop-color="#8B67F2"/><stop offset="1" stop-color="#4720AA"/></linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientTransform="translate(925 135) rotate(135) scale(520)" gradientUnits="userSpaceOnUse"><stop stop-color="#8B67F2" stop-opacity=".25"/><stop offset="1" stop-color="#8B67F2" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect width="1200" height="630" rx="32" fill="url(#bg)"/>
+  <rect width="1200" height="630" rx="32" fill="url(#glow)"/>
+  <g fill="url(#mark)"><path d="m92 270 146-84v91l-88 31-58-20v-18Z"/><path d="m266 170 169 97v24l-66 22-103-36V170Z"/><path d="m92 327 146-37v84L92 381v-54Z"/><path d="m266 290 169 40v54l-169-10v-84Z"/><path d="m120 420 118-22v45l-73 45H91l29-68Z"/><path d="m266 398 139 24 38 66h-78l-99-45v-45Z"/><path d="M224 458h84l31 30H193l31-30Z" opacity=".82"/></g>
+  <text x="505" y="305" fill="#FAF8FF" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="96" font-weight="700" letter-spacing="-5">LayerRail</text>
+  <text x="510" y="375" fill="#BDB5CE" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="30">Deploy anywhere. Keep control.</text>
+  <rect x="510" y="415" width="120" height="4" rx="2" fill="#8B67F2"/>
+</svg>

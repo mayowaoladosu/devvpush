@@ -33,10 +33,30 @@ from forms.auth import EmailLoginForm
 from utils.email import send_email
 from utils.user import sanitize_username, get_user_by_email, get_user_by_provider
 from utils.access import is_email_allowed, notify_denied
+from services.audit import AuditService
+from services.rate_limit import RateLimiter
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth")
+
+
+async def _audit_sign_in(
+    db: AsyncSession,
+    request: Request,
+    user: User,
+    provider: str,
+) -> None:
+    await AuditService.record(
+        db,
+        team_id=user.default_team_id,
+        user=user,
+        request=request,
+        action="user.signed_in",
+        resource_type="user",
+        resource_id=user.id,
+        metadata={"provider": provider},
+    )
 
 
 async def _create_user_with_team(
@@ -156,6 +176,29 @@ async def auth_login(
 
     if request.method == "POST" and await form.validate_on_submit():
         email = form.email.data
+        client_ip = request.client.host if request.client else "unknown"
+        rate = await RateLimiter.check(
+            redis,
+            bucket="auth-email",
+            identity=f"{client_ip}:{email.casefold()}",
+            limit=settings.auth_rate_limit_requests,
+            window_seconds=settings.auth_rate_limit_window_seconds,
+            enabled=settings.rate_limiting_enabled,
+        )
+        if not rate.allowed:
+            flash(
+                request,
+                _(
+                    "Too many sign-in links were requested. Try again in %(seconds)s seconds.",
+                    seconds=rate.retry_after,
+                ),
+                "warning",
+            )
+            return RedirectResponseX(
+                request.url_for("auth_login"),
+                status_code=303,
+                request=request,
+            )
         if not await is_email_allowed(email, db):
             await notify_denied(
                 email,
@@ -336,6 +379,7 @@ async def auth_email_verify(
                 await db.commit()
                 await db.refresh(user)
 
+            await _audit_sign_in(db, request, user, "email")
             return _create_session_cookie(user, settings)
 
         elif token_type == "email_change":
@@ -443,6 +487,7 @@ async def auth_email_verify(
                     ),
                     "success",
                 )
+                await _audit_sign_in(db, request, user, "team_invite")
                 response = _create_session_cookie(user, settings)
                 response.headers["location"] = f"/{invite.team.slug}"
                 return response
@@ -542,6 +587,7 @@ async def auth_github_callback(
 
     await db.commit()
     await db.refresh(user)
+    await _audit_sign_in(db, request, user, "github")
     return _create_session_cookie(user, settings)
 
 
@@ -632,6 +678,7 @@ async def auth_google_callback(
 
         await db.commit()
         await db.refresh(user)
+        await _audit_sign_in(db, request, user, "google")
         return _create_session_cookie(user, settings)
     except Exception:
         flash(request, _("Google login failed"), "error")

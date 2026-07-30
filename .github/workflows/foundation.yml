@@ -1,0 +1,120 @@
+name: LayerRail foundation
+
+on:
+  push:
+    branches: [staging, main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: foundation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  application:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    env:
+      ENV: development
+      SECRET_KEY: ci-secret-key
+      ENCRYPTION_KEY: 4Vv7Z7H71w8mT8BzN19s9N5GZkQaVf5QvbG3nJd28JQ=
+      POSTGRES_PASSWORD: ci-password
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: latest
+          enable-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: uv sync --frozen
+      - name: Python tests
+        run: uv run python -m unittest discover -s tests -v
+      - name: Launch-core lint
+        run: >-
+          uvx ruff check --select E9,F,I
+          routers/api.py services/api_tokens.py services/audit.py
+          services/deployment_policy.py services/notifications.py
+          services/project_config.py services/rate_limit.py
+          tests/test_launch_core.py
+      - name: Template and asset build
+        run: npm ci && npm run build
+      - name: Parse all templates
+        run: >-
+          uv run python -c
+          "from pathlib import Path; from jinja2 import Environment;
+          env=Environment(); [env.parse(p.read_text(encoding='utf-8'))
+          for p in Path('templates').rglob('*.html')]; print('templates ok')"
+      - name: Lockfile check
+        run: uv lock --check
+      - name: CLI tests
+        working-directory: .
+        run: PYTHONPATH=cli python -m unittest discover -s cli/tests -v
+
+  containers-and-migrations:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare deterministic CI environment
+        run: |
+          mkdir -p data
+          cp .env.dev.example data/.env
+          cat >> data/.env <<'EOF'
+          SECRET_KEY=ci-secret-key
+          ENCRYPTION_KEY=4Vv7Z7H71w8mT8BzN19s9N5GZkQaVf5QvbG3nJd28JQ=
+          POSTGRES_PASSWORD=ci-password
+          SERVICE_UID=1000
+          SERVICE_GID=1000
+          DEVPUSH_VOLUME_PREFIX=layerrail-ci
+          GITHUB_APP_PRIVATE_KEY=
+          EOF
+      - name: Render every topology
+        run: |
+          docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml config --quiet
+          docker compose --env-file data/.env -p layerrail-prod-ci -f compose/base.yml -f compose/override.yml -f compose/ssl-default.yml config --quiet
+          NODE_AGENT_ENV_FILE=../.env.node.example docker compose --env-file .env.node.example -p layerrail-node-ci -f compose/node-agent.yml config --quiet
+      - name: Build production images
+        run: |
+          docker compose --env-file data/.env -p layerrail-build-ci -f compose/base.yml -f compose/override.yml build app worker-jobs worker-monitor metrics-exporter
+          docker build -f docker/Dockerfile.node-agent -t layerrail-node-agent:ci .
+      - name: Start migration dependencies
+        run: docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml up -d pgsql redis app
+      - name: Upgrade and check schema
+        run: |
+          healthy=false
+          for attempt in $(seq 1 60); do
+            if docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml exec -T app curl -fsS http://localhost:8000/health >/dev/null 2>&1; then
+              healthy=true
+              break
+            fi
+            echo "Waiting for LayerRail health ($attempt/60)"
+            sleep 2
+          done
+          if [ "$healthy" != true ]; then
+            docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml logs app
+            exit 1
+          fi
+          docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml exec -T app uv run --no-sync alembic upgrade head
+          docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml exec -T app uv run --no-sync alembic check
+          docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml exec -T app uv run --no-sync alembic downgrade c4e8f1a2b730
+          docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml exec -T app uv run --no-sync alembic upgrade head
+      - name: Prove BuildKit isolation
+        env:
+          LAYERRAIL_ENV: development
+          LAYERRAIL_COMPOSE_PROJECT: layerrail-ci
+          SERVICE_UID: "1000"
+          SERVICE_GID: "1000"
+          VERBOSE: "1"
+        run: ./scripts/buildkit-isolation-e2e.sh
+      - name: Node-agent tests
+        run: docker run --rm --user 1000:1000 --workdir /tmp --entrypoint /opt/venv/bin/python -e PYTHONPATH=/source:/agent -v "$PWD/node_agent:/source:ro" layerrail-node-agent:ci -m unittest discover -s /source/tests -v
+      - name: Cleanup
+        if: always()
+        run: docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml down -v --remove-orphans

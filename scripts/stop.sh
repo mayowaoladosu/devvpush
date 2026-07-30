@@ -11,17 +11,17 @@ usage(){
   cat <<USG
 Usage: stop.sh [--components <csv>] [--hard] [-h|--help]
 
-Stop the /dev/push stack (dev or prod auto-detected).
+Stop the LayerRail stack (development or production auto-detected).
 
   --components <csv>
                     Comma-separated list of services to stop (${VALID_COMPONENTS//|/, })
-  --hard             Force stop all containers labeled for the devpush project
+  --hard             Force stop all containers in the internal LayerRail Compose project
   -h, --help         Show this help
 USG
   exit 0
 }
 
-# Force stop all containers labeled for the devpush project
+# Force stop all containers labeled for the configured internal project.
 force_stop_all() {
   if ! command -v docker >/dev/null 2>&1; then
     err "Docker is required for --hard"
@@ -31,8 +31,8 @@ force_stop_all() {
   local -a containers=()
   local containers_out=""
   local container_id=""
-  if ! containers_out="$(docker ps --filter "label=com.docker.compose.project=devpush" -q 2>/dev/null)"; then
-    err "Failed to query running containers for the devpush project."
+  if ! containers_out="$(docker ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" -q 2>/dev/null)"; then
+    err "Failed to query running containers for the ${COMPOSE_PROJECT} project."
     return 1
   fi
   while IFS= read -r container_id; do
@@ -43,7 +43,7 @@ force_stop_all() {
   printf '\n'
   if (( containers_count > 0 )); then
     if ! run_cmd --try "Stopping containers ($containers_count found)" docker stop "${containers[@]}"; then
-      if ! docker ps --filter "label=com.docker.compose.project=devpush" >/dev/null 2>&1; then
+      if ! docker ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" >/dev/null 2>&1; then
         err "Unable to verify whether containers are stopped (docker ps failed)."
         return 1
       fi
@@ -97,7 +97,7 @@ fi
 service_running() {
   local service="$1"
   docker ps \
-    --filter "label=com.docker.compose.project=devpush" \
+    --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" \
     --filter "label=com.docker.compose.service=${service}" \
     -q \
     | grep -q .
@@ -120,7 +120,7 @@ if ((hard_mode==1)); then
         [[ -n "$cid" ]] && selected_ids+=("$cid")
       done < <(
         docker ps \
-          --filter "label=com.docker.compose.project=devpush" \
+          --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" \
           --filter "label=com.docker.compose.service=${service}" \
           -q 2>/dev/null || true
       )
@@ -153,7 +153,7 @@ else
 fi
 
 # Verify stop outcome
-if ! docker ps --filter "label=com.docker.compose.project=devpush" >/dev/null 2>&1; then
+if ! docker ps --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" >/dev/null 2>&1; then
   printf '\n'
   err "Unable to verify whether containers are stopped (docker ps failed)."
   exit 1

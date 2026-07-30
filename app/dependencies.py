@@ -199,19 +199,31 @@ def decode_jwt_claims(
         "exp": {"essential": True},
         "iat": {"essential": True},
     }
-    if required_type == "auth_token":
-        claims_options.update(
-            {
-                "iss": {"essential": True, "value": settings.auth_token_issuer},
-                "aud": {"essential": True, "value": settings.auth_token_audience},
-            }
-        )
     claims = jwt.decode(
         token,
         settings.secret_key,
         claims_options=claims_options,
     )
     claims.validate(leeway=leeway_seconds)
+    if required_type == "auth_token":
+        issuers = {
+            settings.auth_token_issuer,
+            *(
+                value.strip()
+                for value in settings.legacy_auth_token_issuers.split(",")
+                if value.strip()
+            ),
+        }
+        audiences = {
+            settings.auth_token_audience,
+            *(
+                value.strip()
+                for value in settings.legacy_auth_token_audiences.split(",")
+                if value.strip()
+            ),
+        }
+        if claims.get("iss") not in issuers or claims.get("aud") not in audiences:
+            raise ValueError("Invalid authentication token issuer or audience")
     if required_type and claims.get("type") != required_type:
         raise ValueError("Invalid token type")
     return claims

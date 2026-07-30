@@ -75,7 +75,7 @@ if ((keep_docker==0)); then
   printf "Removing Docker resources\n"
 
   # Containers
-  compose_containers="$(docker ps -a --filter "label=com.docker.compose.project=devpush" -q 2>/dev/null || true)"
+  compose_containers="$(docker ps -a --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" -q 2>/dev/null || true)"
   runner_containers="$(docker ps -a --filter "label=devpush.deployment_id" -q 2>/dev/null || true)"
   containers="$(printf "%s\n%s" "$compose_containers" "$runner_containers" | grep -v '^\s*$' | sort -u || true)"
   if [[ -n "$containers" ]]; then
@@ -86,7 +86,7 @@ if ((keep_docker==0)); then
   fi
 
   # Volumes
-  volumes=$(docker volume ls --filter "label=com.docker.compose.project=devpush" -q 2>/dev/null || true)
+  volumes=$(docker volume ls --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" -q 2>/dev/null || true)
   if [[ -n "$volumes" ]]; then
     count=$(printf '%s\n' "$volumes" | wc -l | tr -d ' ')
     run_cmd --try "${CHILD_MARK} Removing volumes ($count found)" docker volume rm $volumes
@@ -95,7 +95,7 @@ if ((keep_docker==0)); then
   fi
 
   # Networks
-  networks=$(docker network ls --filter "name=devpush" -q 2>/dev/null || true)
+  networks=$(docker network ls --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" -q 2>/dev/null || true)
   if [[ -n "$networks" ]]; then
     count=$(printf '%s\n' "$networks" | wc -l | tr -d ' ')
     run_cmd --try "${CHILD_MARK} Removing networks ($count found)" docker network rm $networks

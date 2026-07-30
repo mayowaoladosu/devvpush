@@ -1,5 +1,5 @@
 [Unit]
-Description=/dev/push stack
+Description=LayerRail deployment control plane (legacy path compatibility)
 After=docker.service network.target
 Wants=docker.service
 

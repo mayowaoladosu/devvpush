@@ -1,0 +1,13 @@
+[project]
+name = "layerrail-cli"
+version = "1.0.0"
+description = "Official LayerRail deployment CLI"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+layerrail = "layerrail_cli.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

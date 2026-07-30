@@ -4,10 +4,10 @@
     "css:dev": "tailwindcss -i ./src/styles.css -o ./assets/styles.css --watch",
     "css": "tailwindcss -i ./src/styles.css -o ./assets/styles.css --minify",
     "email": "mjml src/login.mjml -o ./templates/email/login.html && mjml src/email-change.mjml -o ./templates/email/email-change.html && mjml src/team-invite.mjml -o ./templates/email/team-invite.html",
-    "alpine": "cp node_modules/alpinejs/dist/cdn.min.js ./assets/alpine.min.js",
-    "htmx": "cp node_modules/htmx.org/dist/htmx.min.js ./assets/htmx.min.js",
-    "htmx-sse": "cp node_modules/htmx-ext-sse/dist/sse.min.js ./assets/htmx-sse.min.js",
-    "basecoat": "cp node_modules/basecoat-css/dist/js/all.min.js ./assets/basecoat.min.js"
+    "alpine": "node -e \"require('fs').copyFileSync('node_modules/alpinejs/dist/cdn.min.js','assets/alpine.min.js')\"",
+    "htmx": "node -e \"require('fs').copyFileSync('node_modules/htmx.org/dist/htmx.min.js','assets/htmx.min.js')\"",
+    "htmx-sse": "node -e \"require('fs').copyFileSync('node_modules/htmx-ext-sse/dist/sse.min.js','assets/htmx-sse.min.js')\"",
+    "basecoat": "node -e \"require('fs').copyFileSync('node_modules/basecoat-css/dist/js/all.min.js','assets/basecoat.min.js')\""
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.1.18",

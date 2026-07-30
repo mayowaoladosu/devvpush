@@ -15,6 +15,7 @@ from dependencies import (
     get_redis_client,
 )
 from models import Alias, Deployment, Project
+from services.audit import AuditService
 from services.dependency_cache import DependencyCacheService
 from services.deployment import DeploymentService
 from services.deployment_diagnostics import DeploymentDiagnosticService
@@ -29,6 +30,8 @@ from services.dockerfile_builder import (
 )
 from services.loki import LokiService
 from services.node_runtime import deployment_runtime_client
+from services.notifications import NotificationService
+from services.project_config import ProjectConfigError, ProjectConfigService
 from services.registry import RegistryService
 
 logger = logging.getLogger(__name__)
@@ -229,7 +232,38 @@ async def start_deployment(ctx, deployment_id: str):
                 ):
                     return
 
-                # Prepare environment variables
+                github_installation = (
+                    await github_installation_service.get_or_refresh_installation(
+                        deployment.project.github_installation_id, db
+                    )
+                )
+                if not github_installation.token:
+                    raise ValueError("GitHub installation token missing.")
+
+                config_override = None
+                try:
+                    config_override = await ProjectConfigService.load_from_github(
+                        github_installation_service.github_service,
+                        github_installation.token,
+                        deployment.repo_id,
+                        deployment.commit_sha,
+                        str((deployment.config or {}).get("root_directory") or ""),
+                    )
+                except ProjectConfigError as exc:
+                    raise ValueError(str(exc)) from exc
+                if config_override:
+                    deployment.config = ProjectConfigService.merge(
+                        deployment.config,
+                        config_override,
+                    )
+                    await db.commit()
+                    await _push_loki_log(
+                        loki,
+                        deployment,
+                        f"Applied {config_override.source} from the deployment commit",
+                    )
+
+                # Prepare environment variables and build policy after config-as-code.
                 env_vars_dict = DeploymentService().get_runtime_env_vars(
                     deployment, settings
                 )
@@ -245,32 +279,26 @@ async def start_deployment(ctx, deployment_id: str):
                 ).prepare(deployment, create_local=not bool(deployment.node_id))
                 if cache_mount:
                     mounts.append(cache_mount.bind)
-                    env_vars_dict["DEVPUSH_DEPENDENCY_CACHE_GENERATION"] = str(
-                        cache_mount.generation
-                    )
-                    if not deployment.node_id:
-                        env_vars_dict["DEVPUSH_DEPENDENCY_CACHE"] = (
-                            "hit" if cache_mount.warm else "miss"
+                    for prefix in ("LAYERRAIL", "DEVPUSH"):
+                        env_vars_dict[f"{prefix}_DEPENDENCY_CACHE_GENERATION"] = str(
+                            cache_mount.generation
                         )
+                    if not deployment.node_id:
+                        cache_state = "hit" if cache_mount.warm else "miss"
+                        env_vars_dict["LAYERRAIL_DEPENDENCY_CACHE"] = cache_state
+                        env_vars_dict["DEVPUSH_DEPENDENCY_CACHE"] = cache_state
                         await _push_loki_log(
                             loki,
                             deployment,
                             "Dependency cache %s (generation %s, runner %s)"
                             % (
-                                "hit" if cache_mount.warm else "miss",
+                                cache_state,
                                 cache_mount.generation,
                                 cache_mount.runner_slug,
                             ),
                         )
 
                 commands = []
-                github_installation = (
-                    await github_installation_service.get_or_refresh_installation(
-                        deployment.project.github_installation_id, db
-                    )
-                )
-                if not github_installation.token:
-                    raise ValueError("GitHub installation token missing.")
 
                 runner_image = deployment.image
                 if uses_dockerfile:
@@ -529,7 +557,14 @@ async def start_deployment(ctx, deployment_id: str):
                 mounts.extend(runtime_storage.binds)
                 storage_ids = runtime_storage.storage_ids
                 for key, value in runtime_storage.environment.items():
-                    if key.startswith(("DEVPUSH_OBJECT_", "DEVPUSH_MEDIA_")):
+                    if key.startswith(
+                        (
+                            "LAYERRAIL_OBJECT_",
+                            "LAYERRAIL_MEDIA_",
+                            "DEVPUSH_OBJECT_",
+                            "DEVPUSH_MEDIA_",
+                        )
+                    ):
                         env_vars_dict[key] = value
                     else:
                         env_vars_dict.setdefault(key, value)
@@ -915,8 +950,35 @@ async def finalize_deployment(ctx, deployment_id: str):
                     redis_client=redis_client,
                 )
 
+                await AuditService.record(
+                    db,
+                    team_id=deployment.project.team_id,
+                    action="deployment.succeeded",
+                    resource_type="deployment",
+                    resource_id=deployment.id,
+                    metadata={
+                        "project_id": deployment.project_id,
+                        "branch": deployment.branch,
+                        "commit_sha": deployment.commit_sha,
+                    },
+                )
+
             # Cleanup inactive deployments
             queue: ArqRedis = ctx["redis"]
+            try:
+                await NotificationService.emit(
+                    db,
+                    queue,
+                    team_id=deployment.project.team_id,
+                    event="deployment.succeeded",
+                    payload=NotificationService.deployment_payload(deployment),
+                )
+            except Exception:
+                logger.warning(
+                    "%s Could not queue success notifications.",
+                    log_prefix,
+                    exc_info=True,
+                )
             await queue.enqueue_job(
                 "cleanup_inactive_containers", deployment.project_id
             )
@@ -1108,6 +1170,33 @@ async def fail_deployment(
             ),
             redis_client=redis_client,
         )
+        await AuditService.record(
+            db,
+            team_id=deployment.project.team_id,
+            action="deployment.failed",
+            resource_type="deployment",
+            resource_id=deployment.id,
+            metadata={
+                "project_id": deployment.project_id,
+                "branch": deployment.branch,
+                "code": code,
+                "source": source,
+            },
+        )
+        try:
+            await NotificationService.emit(
+                db,
+                ctx["redis"],
+                team_id=deployment.project.team_id,
+                event="deployment.failed",
+                payload=NotificationService.deployment_payload(deployment),
+            )
+        except Exception:
+            logger.warning(
+                "%s Could not queue failure notifications.",
+                log_prefix,
+                exc_info=True,
+            )
         logger.error(f"{log_prefix} Deployment failed and cleaned up.")
 
 

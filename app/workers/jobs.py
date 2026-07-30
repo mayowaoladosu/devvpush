@@ -24,6 +24,7 @@ from workers.tasks.registry import (
 from workers.tasks.storage import deprovision_storage, provision_storage, reset_storage
 from workers.tasks.team import delete_team
 from workers.tasks.user import delete_user
+from services.notifications import deliver_deployment_email, deliver_webhook
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ settings = get_settings()
 
 
 async def worker_startup(ctx):
-    work_root = Path("/tmp/devpush-builds")
+    work_root = Path("/tmp/layerrail-builds")
     if work_root.exists():
         await asyncio.to_thread(shutil.rmtree, work_root, True)
     work_root.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -55,6 +56,8 @@ class WorkerSettings:
         pull_all_runner_images,
         clear_runner_image,
         clear_all_runner_images,
+        deliver_webhook,
+        deliver_deployment_email,
     ]
     redis_settings = RedisSettings.from_dsn(settings.redis_url)
     max_jobs = 8

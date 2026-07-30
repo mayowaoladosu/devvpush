@@ -24,7 +24,7 @@ services:
     cpus: 0.25
     pids_limit: 32
     volumes:
-      - ${NODE_AGENT_DATA_DIR:-/var/lib/devpush-node}:/data
+      - ${NODE_AGENT_DATA_DIR:-/var/lib/layerrail-node}:/data
 
   node-agent:
     build:
@@ -43,11 +43,11 @@ services:
       - ${NODE_AGENT_ENV_FILE:-../data/node-agent.env}
     environment:
       NODE_AGENT_DATA_DIR: /data
-      NODE_AGENT_HOST_DATA_DIR: ${NODE_AGENT_DATA_DIR:-/var/lib/devpush-node}
+      NODE_AGENT_HOST_DATA_DIR: ${NODE_AGENT_DATA_DIR:-/var/lib/layerrail-node}
       NODE_AGENT_DOCKER_SOCKET: /var/run/docker.sock
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ${NODE_AGENT_DATA_DIR:-/var/lib/devpush-node}:/data
+      - ${NODE_AGENT_DATA_DIR:-/var/lib/layerrail-node}:/data
       - ${NODE_AGENT_TLS_DIR:-../data/node-tls}:/tls:ro
     group_add:
       - "${DOCKER_GID:-999}"

@@ -319,6 +319,35 @@ class ProjectDependencyCacheClearForm(StarletteForm):
     submit = SubmitField(_l("Clear dependency cache"))
 
 
+class ProjectDeploymentPolicyForm(StarletteForm):
+    webhook_enabled = BooleanField(_l("Deploy GitHub pushes automatically"), default=True)
+    allowed_branches = TextAreaField(
+        _l("Allowed branch patterns"),
+        validators=[Optional(), Length(max=4000)],
+    )
+    ignored_branches = TextAreaField(
+        _l("Ignored branch patterns"),
+        validators=[Optional(), Length(max=4000)],
+    )
+    ignored_authors = TextAreaField(
+        _l("Ignored commit authors"),
+        validators=[Optional(), Length(max=4000)],
+    )
+    skip_message_tokens = TextAreaField(
+        _l("Skip message tokens"),
+        validators=[Optional(), Length(max=4000)],
+    )
+    max_concurrent = IntegerField(
+        _l("Maximum concurrent deployments per environment"),
+        validators=[DataRequired()],
+        default=1,
+    )
+    supersede_older = BooleanField(
+        _l("Cancel older webhook deployments when a newer push arrives"),
+        default=True,
+    )
+
+
 class ProjectDomainForm(StarletteForm):
     domain_id = HiddenField()
     hostname = StringField(

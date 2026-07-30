@@ -1,0 +1,57 @@
+<form
+  method="post"
+  action="{{ url_for('project_settings', team_slug=team.slug, project_name=project.name).include_query_params(fragment='deployment_policy') }}"
+  hx-post="{{ url_for('project_settings', team_slug=team.slug, project_name=project.name).include_query_params(fragment='deployment_policy') }}"
+  hx-target="this"
+  hx-swap="outerHTML"
+  class="card"
+  x-data="{ changed: false }"
+  @input="changed = true"
+  @change="changed = true"
+>
+  {{ deployment_policy_form.csrf_token(id=False) }}
+  <header class="border-b">
+    <h2>{{ _("Deployment policy") }}</h2>
+    <p>{{ _("Control which GitHub pushes deploy, how commits are filtered, and how much work each environment admits concurrently.") }}</p>
+  </header>
+  <section class="space-y-5">
+    <label class="flex items-start gap-3 rounded-xl border p-4">
+      {{ deployment_policy_form.webhook_enabled(class_="switch mt-0.5") }}
+      <span><span class="block font-medium">{{ deployment_policy_form.webhook_enabled.label.text }}</span><span class="text-sm text-muted-foreground">{{ _("Manual and API deployments remain available when automatic pushes are disabled.") }}</span></span>
+    </label>
+    <div class="grid gap-4 md:grid-cols-2">
+      <div class="space-y-2">
+        {{ deployment_policy_form.allowed_branches.label(class_="label") }}
+        {{ deployment_policy_form.allowed_branches(class_="textarea min-h-28 w-full font-mono text-xs", placeholder="main\nrelease/*") }}
+        <p class="text-xs text-muted-foreground">{{ _("Optional glob patterns. Empty means any branch mapped to an environment.") }}</p>
+      </div>
+      <div class="space-y-2">
+        {{ deployment_policy_form.ignored_branches.label(class_="label") }}
+        {{ deployment_policy_form.ignored_branches(class_="textarea min-h-28 w-full font-mono text-xs", placeholder="wip/*\ndependabot/*") }}
+      </div>
+      <div class="space-y-2">
+        {{ deployment_policy_form.ignored_authors.label(class_="label") }}
+        {{ deployment_policy_form.ignored_authors(class_="textarea min-h-28 w-full font-mono text-xs", placeholder="dependabot[bot]") }}
+      </div>
+      <div class="space-y-2">
+        {{ deployment_policy_form.skip_message_tokens.label(class_="label") }}
+        {{ deployment_policy_form.skip_message_tokens(class_="textarea min-h-28 w-full font-mono text-xs", placeholder="[skip layerrail]\n[skip deploy]") }}
+      </div>
+    </div>
+    <div class="grid gap-4 md:grid-cols-2">
+      <div class="space-y-2">
+        {{ deployment_policy_form.max_concurrent.label(class_="label") }}
+        {{ deployment_policy_form.max_concurrent(class_="input w-full", min="1", max="50") }}
+        {% for error in deployment_policy_form.max_concurrent.errors %}<p class="text-destructive text-sm">{{ error }}</p>{% endfor %}
+      </div>
+      <label class="flex items-start gap-3 rounded-xl border p-4">
+        {{ deployment_policy_form.supersede_older(class_="switch mt-0.5") }}
+        <span><span class="block font-medium">{{ deployment_policy_form.supersede_older.label.text }}</span><span class="text-sm text-muted-foreground">{{ _("Newest-commit-wins keeps rapid pushes from wasting build capacity.") }}</span></span>
+      </label>
+    </div>
+  </section>
+  <footer class="flex justify-end gap-2">
+    <button type="button" class="btn-sm-ghost" hx-get="{{ url_for('project_settings', team_slug=team.slug, project_name=project.name).include_query_params(fragment='deployment_policy') }}" hx-target="closest form" hx-swap="outerHTML" :disabled="!changed">{{ _("Cancel") }}</button>
+    <button class="btn-sm" type="submit" :disabled="!changed">{{ _("Save policy") }}</button>
+  </footer>
+</form>

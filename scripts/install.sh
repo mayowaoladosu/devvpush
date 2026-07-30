@@ -24,7 +24,7 @@ for ((i=0; i<${#args[@]}; i++)); do
 done
 
 if [[ -z "$ref" ]]; then
-  repo="https://github.com/hunvreus/devpush.git"
+  repo="https://github.com/mayowaoladosu/devvpush.git"
   if ! refs_output="$(git ls-remote --tags --refs "$repo" 2>&1)"; then
     printf "Error: git ls-remote failed while resolving latest release (output below)\n%s\n" "$refs_output"
     exit 1
@@ -38,17 +38,17 @@ if [[ -z "$ref" ]]; then
   fi
 fi
 
-LIB_URL="https://raw.githubusercontent.com/hunvreus/devpush/${ref}/scripts/lib.sh"
+LIB_URL="https://raw.githubusercontent.com/mayowaoladosu/devvpush/${ref}/scripts/lib.sh"
 
 # Load lib.sh: prefer local copy; otherwise fetch from the resolved ref
 if [[ -n "$SCRIPT_DIR" && -f "$SCRIPT_DIR/lib.sh" ]]; then
   source "$SCRIPT_DIR/lib.sh"
 elif command -v curl >/dev/null 2>&1; then
-  if ! curl -fsSL "$LIB_URL" -o /tmp/devpush_lib.sh; then
+  if ! curl -fsSL "$LIB_URL" -o /tmp/layerrail_lib.sh; then
     printf "Error: Unable to load lib.sh from %s\n" "$LIB_URL" >&2
     exit 1
   fi
-  source /tmp/devpush_lib.sh
+  source /tmp/layerrail_lib.sh
 else
   printf "Error: Unable to load lib.sh (tried local and remote). curl not found. Try again or clone the repo manually.\n" >&2
   exit 1
@@ -59,13 +59,13 @@ init_script_logging "install"
 
 INSTALL_LOG_DIR="/tmp"
 timestamp="$(date +%Y%m%d-%H%M%S)"
-INSTALL_LOG="$INSTALL_LOG_DIR/devpush-install-${timestamp}.log"
+INSTALL_LOG="$INSTALL_LOG_DIR/layerrail-install-${timestamp}.log"
 mkdir -p "$INSTALL_LOG_DIR" || true
 {
   printf "Install started: %s\n" "$(date -Iseconds)"
   printf "Effective ref: %s\n" "$ref"
 } >"$INSTALL_LOG"
-ln -sfn "$INSTALL_LOG" "$INSTALL_LOG_DIR/devpush-install.log"
+ln -sfn "$INSTALL_LOG" "$INSTALL_LOG_DIR/layerrail-install.log"
 exec > >(tee -a "$INSTALL_LOG") 2>&1
 
 on_error_hook() {
@@ -78,9 +78,9 @@ usage() {
   cat <<USG
 Usage: install.sh [--repo <url>] [--ref <ref>] [--yes] [--no-telemetry] [--verbose]
 
-Install and configure /dev/push on a server (Docker, user, repo, .env).
+Install and configure LayerRail on a server (Docker, user, repo, .env).
 
-  --repo <url>           Git repo to clone (default: https://github.com/hunvreus/devpush.git)
+  --repo <url>           Git repo to clone (default: https://github.com/mayowaoladosu/devvpush.git)
   --ref <ref>            Git ref (branch/tag/commit) to install (default: latest stable tag)
   --yes, -y              Non-interactive, proceed without prompts
   --no-telemetry         Do not send telemetry
@@ -91,7 +91,7 @@ USG
 }
 
 # Parse CLI flags
-repo="https://github.com/hunvreus/devpush.git"
+repo="https://github.com/mayowaoladosu/devvpush.git"
 telemetry=1; yes_flag=0
 [[ "${NO_TELEMETRY:-0}" == "1" ]] && telemetry=0
 
@@ -111,7 +111,7 @@ service_user="$(default_service_user)"
 
 # Guard: prevent running in development mode
 if [[ "$ENVIRONMENT" == "development" ]]; then
-  err "This script is for production only. For development, install dependencies and start the stack (scripts/start.sh). More information: https://devpu.sh/docs/installation/#development"
+  err "This script is for production only. For development, use scripts/start.sh. See https://docs.layerrail.com."
   exit 1
 fi
 
@@ -151,7 +151,7 @@ distro_version="${VERSION_ID:-unknown}"
 
 # Show summary of what we're installing
 printf '\n'
-printf "Installing /dev/push:\n"
+printf "Installing LayerRail:\n"
 printf "  - Repo: %s\n" "$repo"
 printf "  - Ref/Version: %s\n" "$ref"
 printf "  - OS: %s %s\n" "$distro_id" "$distro_version"
@@ -159,12 +159,8 @@ printf "  - Architecture: %s\n" "$arch"
 
 # Banner
 printf '\n'
-printf "\033[38;5;51m    ██╗██████╗ ███████╗██╗   ██╗   ██╗██████╗ ██╗   ██╗███████╗██╗  ██╗\033[0m\n"
-printf "\033[38;5;87m   ██╔╝██╔══██╗██╔════╝██║   ██║  ██╔╝██╔══██╗██║   ██║██╔════╝██║  ██║\033[0m\n"
-printf "\033[38;5;123m  ██╔╝ ██║  ██║█████╗  ██║   ██║ ██╔╝ ██████╔╝██║   ██║███████╗███████║\033[0m\n"
-printf "\033[38;5;159m ██╔╝  ██║  ██║██╔══╝  ╚██╗ ██╔╝██╔╝  ██╔═══╝ ██║   ██║╚════██║██╔══██║\033[0m\n"
-printf "\033[38;5;195m██╔╝   ██████╔╝███████╗ ╚████╔╝██╔╝   ██║     ╚██████╔╝███████║██║  ██║\033[0m\n"
-printf "\033[38;5;225m╚═╝    ╚═════╝ ╚══════╝  ╚═══╝ ╚═╝    ╚═╝      ╚═════╝ ╚══════╝╚═╝  ╚═╝\033[0m\n"
+printf "\033[38;5;141m  ◆  LayerRail\033[0m\n"
+printf "\033[38;5;105m     Deploy anywhere. Keep control.\033[0m\n"
 
 # Ensure apt is fully non-interactive and avoid needrestart prompts
 export DEBIAN_FRONTEND=noninteractive
@@ -327,7 +323,7 @@ LE_EMAIL=
 CERT_CHALLENGE_PROVIDER=default # default|cloudflare|route53|gcloud|digitalocean|azure
 # CF_DNS_API_TOKEN=
 
-# GitHub App (see https://devpu.sh/gh-app)
+# GitHub App (see https://docs.layerrail.com)
 GITHUB_APP_ID=
 GITHUB_APP_NAME=
 GITHUB_APP_PRIVATE_KEY=
@@ -342,9 +338,9 @@ RESEND_API_KEY=
 # Optional
 # GOOGLE_CLIENT_ID=
 # GOOGLE_CLIENT_SECRET=
-# APP_NAME=/dev/push
-# APP_DESCRIPTION=
-# EMAIL_SENDER_NAME=/dev/push
+# APP_NAME=LayerRail
+# APP_DESCRIPTION=Build, deploy, and operate applications on infrastructure you control.
+# EMAIL_SENDER_NAME=LayerRail
 # POSTGRES_DB=devpush
 # POSTGRES_USER=devpush-app
 # REDIS_URL=redis://redis:6379
@@ -426,19 +422,25 @@ printf '\n'
 printf "Installing systemd unit\n"
 
 # Install systemd unit
-unit_path="/etc/systemd/system/devpush.service"
-run_cmd "${CHILD_MARK} Installing unit file" install -m 0644 "$APP_DIR/scripts/devpush.service" "$unit_path"
+unit_name="layerrail.service"
+unit_source="$APP_DIR/scripts/layerrail.service"
+if [[ "$APP_DIR" == "/opt/devpush" ]]; then
+  unit_name="devpush.service"
+  unit_source="$APP_DIR/scripts/devpush.service"
+fi
+unit_path="/etc/systemd/system/$unit_name"
+run_cmd "${CHILD_MARK} Installing unit file" install -m 0644 "$unit_source" "$unit_path"
 run_cmd "${CHILD_MARK} Reloading systemd" systemctl daemon-reload
-run_cmd "${CHILD_MARK} Enabling devpush.service" systemctl enable devpush.service
+run_cmd "${CHILD_MARK} Enabling $unit_name" systemctl enable "$unit_name"
 
 # Success message
 printf '\n'
 printf "${GRN}Install complete (version: %s). ✔${NC}\n" "$ref"
 printf '\n'
 printf "Next steps:\n"
-printf "  1. Create a GitHub App: https://devpu.sh/gh-app\n"
+printf "  1. Create a GitHub App: https://docs.layerrail.com\n"
 printf "  2. Edit .env and fill in the required values: sudo nano %s\n" "$ENV_FILE"
 printf "  3. Ensure your DNS is configured and propagated\n"
-printf "  4. Start the service: sudo systemctl start devpush.service\n"
+printf "  4. Start the service: sudo systemctl start %s\n" "$unit_name"
 printf '\n'
-printf "Documentation: https://devpu.sh/docs/installation\n"
+printf "Documentation: https://docs.layerrail.com\n"

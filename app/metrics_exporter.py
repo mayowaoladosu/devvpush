@@ -44,11 +44,13 @@ async def metrics():
             [*local_values, *remote_values],
             scrape_duration_seconds=time.monotonic() - started,
         )
-        payload += "# HELP devpush_node_metrics_up Whether a remote node metric endpoint responded.\n"
-        payload += "# TYPE devpush_node_metrics_up gauge\n"
+        payload += "# HELP layerrail_node_metrics_up Whether a remote node metric endpoint responded.\n"
+        payload += "# TYPE layerrail_node_metrics_up gauge\n"
         for node_id, healthy in sorted(node_statuses.items()):
             escaped = app.state.exporter._escape_label(node_id)
-            payload += f'devpush_node_metrics_up{{node_id="{escaped}"}} {1 if healthy else 0}\n'
+            value = 1 if healthy else 0
+            payload += f'layerrail_node_metrics_up{{node_id="{escaped}"}} {value}\n'
+            payload += f'devpush_node_metrics_up{{node_id="{escaped}"}} {value}\n'
     except Exception as error:
         raise HTTPException(status_code=503, detail="Metric collection failed") from error
     return PlainTextResponse(

@@ -1,16 +1,16 @@
-# Contributing to /dev/push
+# Contributing to LayerRail
 
-**Support development by sponsoring the author: https://github.com/sponsors/hunvreus**
+LayerRail is derived from DevPush. Upstream sponsorship remains available at https://github.com/sponsors/hunvreus.
 
 ## General Guidelines
 
-- Submit pull requests (PRs) against the `development` branch, not `main`.
+- Submit pull requests against `staging`, not `main`.
 - For branches:
   - `main` is the production and default branch.
-  - `development` is for staging.
+  - `staging` is the integration branch.
   - New features are worked in `feature/name-of-the-feature` branches.
   - Issues are addressed in `issue/123-main-issue` branches.
-  - When ready, we PR against `development`, test it and then finally merge to `main`.
+  - Changes land on `staging`, pass the foundation workflow and real E2E validation, then merge to `main`.
 - Keep changes focused: one feature or fix per PR.
 - Test locally before submitting.
 - Follow existing code style.
@@ -32,8 +32,8 @@
 
 **Privilege Model:**
 
-- `/var/lib/devpush`: Owned by the `devpush` system user created during install (UID/GID stored as `SERVICE_UID/SERVICE_GID` in `.env`)
-- Scripts work whether run as root or the `devpush` user; avoid `sudo` inside scripts unless they must run as root
+- `/var/lib/layerrail`: Owned by the `layerrail` system user on new installs (legacy installs may remain under `/var/lib/devpush` with the `devpush` user).
+- Scripts work whether run as root or the detected service user; avoid `sudo` inside scripts unless they must run as root.
 
 **File Operations:**
 
@@ -78,8 +78,8 @@ set -Eeuo pipefail
 echo "Description of what this upgrade does..."
 
 # Idempotent operations only
-if [[ -d /var/lib/devpush ]]; then
-  sudo chown -R root:root /var/lib/devpush 2>/dev/null || true
+if [[ -d /var/lib/layerrail ]]; then
+  sudo chown -R root:root /var/lib/layerrail 2>/dev/null || true
 fi
 
 exit 0
@@ -113,7 +113,7 @@ exit 0
 - Types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
 - Examples:
   - `feat(scripts): add upgrade hooks for version-specific migrations`
-  - `fix(install): use sudo for /var/lib/devpush operations`
+  - `fix(install): use sudo for /var/lib/layerrail operations`
   - `docs(contributing): add production scripts conventions`
 
 ---

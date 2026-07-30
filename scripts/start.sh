@@ -11,7 +11,7 @@ usage(){
   cat <<USG
 Usage: start.sh [--components <csv>] [--no-migrate] [--timeout <sec>] [-v|--verbose] [-h|--help]
 
-Start the /dev/push stack (dev or prod auto-detected).
+Start the LayerRail stack (development or production auto-detected).
 
   --components <csv>
                     Comma-separated list of services to start (${VALID_COMPONENTS//|/, })
@@ -67,7 +67,7 @@ wait_for_app_health() {
   local status container
 
   while (( SECONDS < deadline )); do
-    container="$(docker ps -a --filter "label=com.docker.compose.project=devpush" --filter "label=com.docker.compose.service=app" -q | head -1 || true)"
+    container="$(docker ps -a --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" --filter "label=com.docker.compose.service=app" -q | head -1 || true)"
     if [[ -n "$container" ]]; then
       status="$(docker inspect --format '{{.State.Status}}{{if .State.Health}}:{{.State.Health.Status}}{{end}}' "$container" 2>/dev/null || true)"
       case "$status" in

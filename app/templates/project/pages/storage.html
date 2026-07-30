@@ -61,8 +61,8 @@
             </a>
 
             {% set storage = association.storage %}
-            {% set object_prefix = "DEVPUSH_OBJECT_" ~ object_storage_namespace(storage.name) %}
-            {% set media_prefix = "DEVPUSH_MEDIA_" ~ media_provider_namespace(storage.name) %}
+              {% set object_prefix = "LAYERRAIL_OBJECT_" ~ object_storage_namespace(storage.name) %}
+              {% set media_prefix = "LAYERRAIL_MEDIA_" ~ media_provider_namespace(storage.name) %}
             <div
               class="text-muted-foreground"
               data-tooltip="{{ _('Environments') }}"

@@ -23,6 +23,7 @@ from services.deployment_reconciler import (
 )
 from services.loki import LokiService
 from services.node_runtime import deployment_runtime_client
+from services.notifications import NotificationService
 from services.storage_jobs import StorageJobs
 from workers.tasks.deployment import fail_deployment, finalize_deployment
 
@@ -426,6 +427,7 @@ async def monitor():
                         lambda incident: _recover_lifecycle_job(redis_pool, incident)
                     )
                     await _reconcile_storage_jobs(redis_pool)
+                    await NotificationService.reconcile_pending_webhooks(redis_pool)
                     last_reconcile = now
 
             except exc.SQLAlchemyError as e:

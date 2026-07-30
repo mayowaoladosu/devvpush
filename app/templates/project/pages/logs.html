@@ -18,6 +18,22 @@
     <div class="flex items-center gap-x-2">
       <button
         type="button"
+        class="btn-sm-outline"
+        onclick="navigator.clipboard.writeText([...document.querySelectorAll('#logs [data-log-line]')].map(row => row.innerText.trim()).join('\n'))"
+      >
+        {% include "icons/copy.svg" %}
+        {{ _('Copy visible') }}
+      </button>
+      <button
+        type="button"
+        class="btn-sm-outline"
+        onclick="const text=[...document.querySelectorAll('#logs [data-log-line]')].map(row=>row.innerText.trim()).join('\n');const blob=new Blob([text],{type:'text/plain'});const link=document.createElement('a');link.href=URL.createObjectURL(blob);link.download='{{ project.slug }}-logs.txt';link.click();URL.revokeObjectURL(link.href)"
+      >
+        {% include "icons/arrow-down.svg" %}
+        {{ _('Export') }}
+      </button>
+      <button
+        type="button"
         class="btn-icon-outline"
         data-tooltip="{{ _('Refresh') }}"
         aria-label="{{ _('Refresh') }}"

@@ -58,7 +58,7 @@
     <div class="space-y-3">
       <label class="label">{{ _('Runtime access') }}</label>
       <div class="input font-mono text-[13px] text-muted-foreground">
-        {% if association.storage.type == 'object' %}DEVPUSH_OBJECT_{{ object_storage_namespace(association.storage.name) }}_*{% else %}DEVPUSH_MEDIA_{{ media_provider_namespace(association.storage.name) }}_*{% endif %}
+                  {% if association.storage.type == 'object' %}LAYERRAIL_OBJECT_{{ object_storage_namespace(association.storage.name) }}_*{% else %}LAYERRAIL_MEDIA_{{ media_provider_namespace(association.storage.name) }}_*{% endif %}
       </div>
     </div>
   {% else %}

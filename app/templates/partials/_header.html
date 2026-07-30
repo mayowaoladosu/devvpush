@@ -25,15 +25,12 @@
 		<nav class="flex items-center gap-x-1.5 sm:gap-x-2.5">
 			<a
 				href="/"
-				class="w-6 h-8 shrink-0 flex items-center justify-center [&>svg]:size-6"
+				class="h-8 shrink-0 flex items-center gap-2 font-semibold tracking-tight"
 				aria-label="{{ app_name }}" 
 				x-boost="true"
 			>
-				<svg width="120" height="120" viewBox="0 0 120 120" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-					<path d="M39.9265 17L16.5652 103.791H0L23.3612 17H39.9265Z" />
-					<path
-						d="M81.7018 98.5804L71.6494 88.5988L92.6037 67.6445H47.1555V52.9198H92.6037L71.6494 31.9655L81.7018 21.9839L120 60.2822L81.7018 98.5804Z" />
-				</svg>
+				<img src="{{ url_for('assets', path='/favicon.svg') }}" alt="" class="size-7 rounded-lg">
+				<span class="max-sm:hidden">LayerRail</span>
 			</a>
 
 			{% if current_user %}
@@ -134,13 +131,13 @@
 				trigger_attrs={"class": "btn-sm-icon-ghost max-sm:hidden"},
 				popover_attrs={"data-align": "end"}
 			) %}
-				<a href="https://devpu.sh/docs" target="_blank" role="menuitem">
+				<a href="https://docs.layerrail.com" target="_blank" role="menuitem">
 					{{ _('Documentation') }}
 					<span class="ml-auto text-muted-foreground [&>svg]:size-3">
 						{% include "icons/external-link.svg" %}
 					</span>
 				</a>
-				<a href="https://devpu.sh/chat" target="_blank" role="menuitem">
+				<a href="https://discord.gg/JbYPEDjUHX" target="_blank" role="menuitem">
 					{{ _('Chat') }}
 					<span class="ml-auto text-muted-foreground [&>svg]:size-3">
 						{% include "icons/external-link.svg" %}

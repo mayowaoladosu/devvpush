@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/mayowaoladosu/devvpush/staging/schema/layerrail.schema.json",
+  "title": "LayerRail project configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": "1" },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "strategy": { "enum": ["zero-config", "dockerfile"] },
+        "preset": { "type": "string", "maxLength": 255 },
+        "runner": { "type": "string", "maxLength": 255 },
+        "rootDirectory": { "type": "string", "maxLength": 255 },
+        "dockerfile": { "type": "string", "maxLength": 255 },
+        "buildCommand": { "type": "string", "maxLength": 2000 },
+        "preDeployCommand": { "type": "string", "maxLength": 2000 },
+        "startCommand": { "type": "string", "maxLength": 2000 }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpus": { "type": "number", "exclusiveMinimum": 0, "maximum": 256 },
+        "memoryMb": { "type": "integer", "minimum": 16, "maximum": 1048576 }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "webhookEnabled": { "type": "boolean" },
+        "allowedBranches": { "$ref": "#/$defs/patterns" },
+        "ignoredBranches": { "$ref": "#/$defs/patterns" },
+        "ignoredAuthors": { "$ref": "#/$defs/patterns" },
+        "skipMessageTokens": { "$ref": "#/$defs/patterns" },
+        "maxConcurrent": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "supersedeOlder": { "type": "boolean" }
+      }
+    }
+  },
+  "required": ["version"],
+  "$defs": {
+    "patterns": {
+      "type": "array",
+      "maxItems": 50,
+      "items": { "type": "string", "minLength": 1, "maxLength": 255 }
+    }
+  }
+}
