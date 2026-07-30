@@ -26,6 +26,7 @@ verify_daemon_boundary() {
   local buildkit_id buildkit_networks buildkit_mounts buildkit_command
   local app_mounts worker_groups
   local egress_id egress_networks
+  ((VERBOSE == 1)) && set -x
   buildkit_id="$("${COMPOSE_BASE[@]}" ps -q buildkitd)"
   [[ -n "$buildkit_id" ]]
 
@@ -63,18 +64,22 @@ verify_daemon_boundary() {
     stat -c '%a %u %g' //run/buildkit/buildkitd.sock | grep -Fxq '660 1000 1000'
   "${COMPOSE_BASE[@]}" exec -T worker-jobs buildctl \
     --addr unix:///run/buildkit/buildkitd.sock debug workers >/dev/null
+  ((VERBOSE == 1)) && set +x
 }
 
 verify_proxy_policy() {
   local status
+  ((VERBOSE == 1)) && set -x
   status="$("${COMPOSE_BASE[@]}" exec -T worker-jobs \
     sh -ec 'curl -sS -w "\n%{http_code}\n" -X POST \
       http://docker-proxy:2375/build | tail -n 1')"
   [[ "$status" == "403" ]]
+  ((VERBOSE == 1)) && set +x
 }
 
 run_isolation_build() {
   local app_id app_ip
+  ((VERBOSE == 1)) && set -x
   app_id="$("${COMPOSE_BASE[@]}" ps -q app)"
   app_ip="$(docker inspect --format '{{(index .NetworkSettings.Networks "devpush_internal").IPAddress}}' "$app_id")"
   [[ -n "$app_ip" ]]
@@ -97,6 +102,7 @@ run_isolation_build() {
     --output "type=local,dest=$output_dir"
   "${COMPOSE_BASE[@]}" exec -T worker-jobs \
     grep -Fxq 'buildkit-isolation-passed' "$output_dir/proof.txt"
+  ((VERBOSE == 1)) && set +x
 }
 
 wait_for_buildkit() {

@@ -130,4 +130,6 @@ jobs:
         run: docker run --rm --user 1000:1000 --workdir /tmp --entrypoint /opt/venv/bin/python -e PYTHONPATH=/source:/agent -v "$PWD/node_agent:/source:ro" layerrail-node-agent:ci -m unittest discover -s /source/tests -v
       - name: Cleanup
         if: always()
-        run: docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml down -v --remove-orphans
+        run: |
+          docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml kill || true
+          docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml down -v --remove-orphans
