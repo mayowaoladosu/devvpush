@@ -107,6 +107,17 @@ jobs:
           docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml exec -T app uv run --no-sync alembic check
           docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml exec -T app uv run --no-sync alembic downgrade c4e8f1a2b730
           docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml exec -T app uv run --no-sync alembic upgrade head
+      - name: Enable rootless user namespaces
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          if [ -e /proc/sys/kernel/unprivileged_userns_clone ]; then
+            sudo sysctl -w kernel.unprivileged_userns_clone=1
+          fi
+          if [ "$(sysctl -n user.max_user_namespaces)" -le 0 ]; then
+            sudo sysctl -w user.max_user_namespaces=63359
+          fi
       - name: Prove BuildKit isolation
         env:
           LAYERRAIL_ENV: development
