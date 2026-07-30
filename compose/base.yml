@@ -63,6 +63,7 @@ services:
       HOST_DATA_DIR: ${DATA_DIR:-../data}
       SERVICE_UID: ${SERVICE_UID}
       SERVICE_GID: ${SERVICE_GID}
+      DOCKER_CONFIG: /tmp/layerrail-docker-config
       BUILDKIT_PROXY_URL: "http://${BUILDKIT_PROXY_IP:-10.250.0.2}:3128"
     group_add:
       - "1000"

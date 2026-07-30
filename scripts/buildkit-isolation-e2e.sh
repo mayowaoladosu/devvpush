@@ -26,7 +26,7 @@ verify_daemon_boundary() {
   local buildkit_id buildkit_networks buildkit_mounts buildkit_command
   local app_mounts worker_groups
   local egress_id egress_networks
-  ((VERBOSE == 1)) && set -x
+  if ((VERBOSE == 1)); then set -x; fi
   buildkit_id="$("${COMPOSE_BASE[@]}" ps -q buildkitd)"
   [[ -n "$buildkit_id" ]]
 
@@ -60,26 +60,28 @@ verify_daemon_boundary() {
 
   worker_groups="$("${COMPOSE_BASE[@]}" exec -T worker-jobs id -G)"
   grep -Eq '(^|[[:space:]])1000([[:space:]]|$)' <<<"$worker_groups"
+  "${COMPOSE_BASE[@]}" exec -T worker-jobs sh -ec \
+    'test "$DOCKER_CONFIG" = /tmp/layerrail-docker-config && mkdir -p "$DOCKER_CONFIG" && test -w "$DOCKER_CONFIG"'
   "${COMPOSE_BASE[@]}" exec -T worker-jobs \
     stat -c '%a %u %g' //run/buildkit/buildkitd.sock | grep -Fxq '660 1000 1000'
   "${COMPOSE_BASE[@]}" exec -T worker-jobs buildctl \
     --addr unix:///run/buildkit/buildkitd.sock debug workers >/dev/null
-  ((VERBOSE == 1)) && set +x
+  if ((VERBOSE == 1)); then set +x; fi
 }
 
 verify_proxy_policy() {
   local status
-  ((VERBOSE == 1)) && set -x
+  if ((VERBOSE == 1)); then set -x; fi
   status="$("${COMPOSE_BASE[@]}" exec -T worker-jobs \
     sh -ec 'curl -sS -w "\n%{http_code}\n" -X POST \
       http://docker-proxy:2375/build | tail -n 1')"
   [[ "$status" == "403" ]]
-  ((VERBOSE == 1)) && set +x
+  if ((VERBOSE == 1)); then set +x; fi
 }
 
 run_isolation_build() {
   local app_id app_ip
-  ((VERBOSE == 1)) && set -x
+  if ((VERBOSE == 1)); then set -x; fi
   app_id="$("${COMPOSE_BASE[@]}" ps -q app)"
   app_ip="$(docker inspect --format '{{(index .NetworkSettings.Networks "devpush_internal").IPAddress}}' "$app_id")"
   [[ -n "$app_ip" ]]
@@ -102,7 +104,7 @@ run_isolation_build() {
     --output "type=local,dest=$output_dir"
   "${COMPOSE_BASE[@]}" exec -T worker-jobs \
     grep -Fxq 'buildkit-isolation-passed' "$output_dir/proof.txt"
-  ((VERBOSE == 1)) && set +x
+  if ((VERBOSE == 1)); then set +x; fi
 }
 
 wait_for_buildkit() {
@@ -137,7 +139,7 @@ run_cmd "Starting isolated BuildKit services..." \
   "${COMPOSE_BASE[@]}" up -d buildkit-egress buildkitd docker-proxy
 run_cmd "Waiting for the rootless BuildKit daemon..." wait_for_buildkit
 run_cmd "Starting the isolated jobs worker..." \
-  "${COMPOSE_BASE[@]}" up -d worker-jobs
+  "${COMPOSE_BASE[@]}" up -d --wait --wait-timeout 120 worker-jobs
 run_cmd "Verifying BuildKit daemon boundary..." verify_daemon_boundary
 run_cmd "Verifying host Docker build denial..." verify_proxy_policy
 run_cmd "Blocking build-step control-plane and socket access..." run_isolation_build
