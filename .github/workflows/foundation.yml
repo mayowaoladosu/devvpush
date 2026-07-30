@@ -45,7 +45,7 @@ jobs:
           services/project_config.py services/rate_limit.py
           tests/test_launch_core.py
       - name: Template and asset build
-        run: npm ci && npm run build
+        run: npm ci && npm run build && npm audit --audit-level=high
       - name: Parse all templates
         run: >-
           uv run python -c
@@ -75,6 +75,8 @@ jobs:
           DEVPUSH_VOLUME_PREFIX=layerrail-ci
           GITHUB_APP_PRIVATE_KEY=
           EOF
+          mkdir -p data/upload data/traefik data/registry
+          sudo chown -R 1000:1000 data
       - name: Render every topology
         run: |
           docker compose --env-file data/.env -p layerrail-ci -f compose/base.yml -f compose/override.dev.yml config --quiet

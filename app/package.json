@@ -15,7 +15,14 @@
     "basecoat-css": "^0.3.11",
     "htmx-ext-sse": "^2.2.4",
     "htmx.org": "^2.0.8",
-    "mjml": "^4.18.0",
+    "mjml": "5.4.0",
     "tailwindcss": "^4.1.18"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.9",
+    "editorconfig": "3.0.2",
+    "glob": "13.0.6",
+    "js-beautify": "2.0.3",
+    "minimatch": "10.2.6"
   }
 }
